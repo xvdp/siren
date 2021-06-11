@@ -66,7 +66,7 @@ def _np_image(image, dtype='float32'):
     return image
 
 
-def get_video(url, tofolder="data", as_images=False, as_video=False, crop=False, max_size=None, show=True, frame_range=None):
+def get_video(url, tofolder="data", as_images=False, as_video=False, crop=False, max_size=None, show=True, frame_range=None, skip_frames=0):
     """ load video from folder or url
     Args
         url         (str) url or filename
@@ -137,6 +137,9 @@ def get_video(url, tofolder="data", as_images=False, as_video=False, crop=False,
         while True:
             r, frame = video.read()
             if frame is not None:
+                if skip_frames and i%skip_frames:
+                    i += 1
+                    continue
                 print("video frame: {:>6}  ".format(i), end="\r")
                 if _scale > 1:
                     frame = cv2.resize(frame, size, interpolation=cv2.INTER_CUBIC)
