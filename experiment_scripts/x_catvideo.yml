@@ -1,0 +1,13 @@
+# Example config file  in yaml format
+logging_root:            /media/z/Malatesta/zXb/share/siren
+experiment_name:          cat_2
+batch_size:                   1
+lr:                      0.0001
+num_epochs:                1000
+epochs_til_ckpt:            500
+steps_til_summary:          100
+video_path:     ./data/cat_video.mp4
+model_type:                 sine
+sample_frac:              0.0038
+checkpoint_path:           None
+verbose: 1

@@ -449,7 +449,8 @@ class Video(Dataset):
             self.vid = np.load(path_to_video)
         elif 'mp4' in path_to_video:
             self.vid = skvideo.io.vread(path_to_video).astype(np.single) / 255.
-        elif os.path.isdir(path_to_video):
+
+        elif os.path.isdir(path_to_video): # x added image list
             images = sorted([f.path for f in os.scandir(path_to_video) if f.name[-4:].lower() in (".png", ".jpg", ".jpeg")])
             dataset = []
             for i, image in enumerate(images):

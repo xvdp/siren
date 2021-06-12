@@ -1,0 +1,16 @@
+
+# Run from siren root as
+# python experiment_scripts/x_train_videos.py --config_filepath experiment_scripts/x_eclipse.yml
+# Example config file  in yaml format
+logging_root:            /media/z/Malatesta/zXb/share/siren
+experiment_name:        eclipse_512
+batch_size:                   1
+lr:                      0.0001
+num_epochs:                1000
+epochs_til_ckpt:            500
+steps_til_summary:          100
+video_path:     ./data/eclipse_256
+model_type:                 sine
+sample_frac:              0.0038
+checkpoint_path:           None
+verbose: 1

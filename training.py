@@ -8,15 +8,34 @@ from tqdm.autonotebook import tqdm
 import time
 import numpy as np
 import os
+import os.path as osp
 import shutil
 
+import x_utils
+
+
+
+# if opt.verbose:
+#     params = sum([p.numel() for p in model.parameters()])
+#     gpuse = torch.cuda.max_memory_reserved()/2**30
+#     print("loaded model: {} parameters, {} GB VRAM".format(params, gpuse))
+def _continue(folder, init=False):
+    """
+    Create place holder file. Kill file to stop training.
+    """
+    _cont = osp.join(folder, "_continue_training")
+    if init and not osp.isfile(_cont):
+        with open(_cont, "w") as _fi:
+            pass
+    return osp.isfile(_cont)
 
 def train(model, train_dataloader, epochs, lr, steps_til_summary, epochs_til_checkpoint, model_dir, loss_fn,
-          summary_fn, val_dataloader=None, double_precision=False, clip_grad=False, use_lbfgs=False, loss_schedules=None):
+          summary_fn, val_dataloader=None, double_precision=False, clip_grad=False, use_lbfgs=False, loss_schedules=None,
+          verbose=0):
 
     optim = torch.optim.Adam(lr=lr, params=model.parameters())
 
-    # copy settings from Raissi et al. (2019) and here 
+    # copy settings from Raissi et al. (2019) and here
     # https://github.com/maziarraissi/PINNs
     if use_lbfgs:
         optim = torch.optim.LBFGS(lr=lr, params=model.parameters(), max_iter=50000, max_eval=50000,
@@ -37,10 +56,14 @@ def train(model, train_dataloader, epochs, lr, steps_til_summary, epochs_til_che
 
     writer = SummaryWriter(summaries_dir)
 
+    _continue(checkpoints_dir, init=True)
     total_steps = 0
     with tqdm(total=len(train_dataloader) * epochs) as pbar:
         train_losses = []
         for epoch in range(epochs):
+            if not _continue(checkpoints_dir):
+                break
+
             if not epoch % epochs_til_checkpoint and epoch:
                 torch.save(model.state_dict(),
                            os.path.join(checkpoints_dir, 'model_epoch_%04d.pth' % epoch))
@@ -53,6 +76,13 @@ def train(model, train_dataloader, epochs, lr, steps_til_summary, epochs_til_che
                 model_input = {key: value.cuda() for key, value in model_input.items()}
                 gt = {key: value.cuda() for key, value in gt.items()}
 
+                if verbose and step == 0:
+                    mk = list(model_input.keys())
+                    gk = list(gt.keys())
+                    gpuse = torch.cuda.max_memory_reserved()/2**30
+                    print("step {}\t input_items {}\t item_size {}\t gt_size {}\t, gpu {} GB".format(step,  len(model_input.items()),
+                                                                                          tuple(model_input[mk[0]].shape),
+                                                                                          tuple(gt[gk[0]].shape), gpuse))
                 if double_precision:
                     model_input = {key: value.double() for key, value in model_input.items()}
                     gt = {key: value.double() for key, value in gt.items()}
@@ -64,13 +94,15 @@ def train(model, train_dataloader, epochs, lr, steps_til_summary, epochs_til_che
                         losses = loss_fn(model_output, gt)
                         train_loss = 0.
                         for loss_name, loss in losses.items():
-                            train_loss += loss.mean() 
+                            train_loss += loss.mean()
                         train_loss.backward()
                         return train_loss
                     optim.step(closure)
 
                 model_output = model(model_input)
                 losses = loss_fn(model_output, gt)
+                if verbose and step == 0:
+                    print("losses {}".format(len(losses)))
 
                 train_loss = 0.
                 for loss_name, loss in losses.items():

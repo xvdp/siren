@@ -1,11 +1,13 @@
 """
 data utility functions
 """
+import subprocess as sp
 import os
 import os.path as osp
 from urllib.parse import urlparse
-import requests
 from io import BytesIO
+import requests
+import psutil
 
 import numpy as np
 import cv2
@@ -14,8 +16,11 @@ import cv2
 import hashlib
 import json
 from PIL import Image
+# pylint: disable=no-member
 
-
+###
+# get image from url / file
+#
 def loadimg(url):
     """ load PIL.Image from url
     """
@@ -52,7 +57,7 @@ def get_image(image, as_np=False, dtype=None):
 def _np_image(image, dtype='float32'):
     """  convert to np.array to dtype
     Args
-        dtype   (str ['float32']) | 'uint8', 'float64 
+        dtype   (str ['float32']) | 'uint8', 'float64
     """
     image = np.asarray(image)
     if dtype is not None and image.dtype != np.dtype(dtype):
@@ -65,17 +70,32 @@ def _np_image(image, dtype='float32'):
         image = image.astype(dtype)
     return image
 
-
+###
+# get video from url or file
+#
 def get_video(url, tofolder="data", as_images=False, as_video=False, crop=False, max_size=None, show=True, frame_range=None, skip_frames=0):
     """ load video from folder or url
     Args
         url         (str) url or filename
         tofolder    (str ['data']) if as_images or as_video, save to folder
         as_images   (bool [False]) save to pngs
-        as_video    (bool [False]) save to local file if different from url
         crop        (bool [False]) if True crop to square
         max_size    (tuple [None]) scale video
+        skip_frames (int [0]) number of frames to skip for everyone saved
+
+        # these options dont work in colab
+        as_video    (bool [False]) save to local file if different from url
         show        (bool [True])
+    Examples:
+    # save video from url
+    tofolder = "data"
+    url = "https://images-assets.nasa.gov/video/AFRC-2017-11522-2_G-III_Eclipse_Totality/AFRC-2017-11522-2_G-III_Eclipse_Totality~orig.mp4"
+    >>> get_video(url, as_video=True, tofolder=tofolder, show=True)
+
+    # load from file save range to local cropped images
+    url = "data/AFRC-2017-11522-2_G-III_Eclipse_Totality~orig.mp4"
+    tofolder = "data/eclipse_512"
+    >>> get_video(url, max_size=512, crop=True, frame_range=[6600, 8025], as_images=True, tofolder=tofolder, show=True, skip_frames=0)
     """
     # https://images.nasa.gov/
     #url = "http://images-assets.nasa.gov/video/jsc2017m000793_2017Eclipse_4K_YT/jsc2017m000793_2017Eclipse_4K_YT~orig.mp4"
@@ -94,7 +114,8 @@ def get_video(url, tofolder="data", as_images=False, as_video=False, crop=False,
         if isinstance(max_size, (list,tuple)):
             _xratio = size[0]/max_size[0]
             _yratio = size[1]/max_size[1]
-            _scale = max(_xratio, _yratio)
+            # if crop scale larger then crop
+            _scale = max(_xratio, _yratio) if not crop else min(_xratio, _yratio)
             if _scale > 1:
                 size[0] = int(size[0]//_scale)
                 size[1] = int(size[1]//_scale)
@@ -147,15 +168,15 @@ def get_video(url, tofolder="data", as_images=False, as_video=False, crop=False,
                     _y, _x = frame.shape[:2]
                     _y = (_y - crop)//2
                     _x = (_x - crop)//2
-                    frame = frame[_y:_y+crop, _x:_x+crop]                   
+                    frame = frame[_y:_y+crop, _x:_x+crop]
 
                 if as_images:
                     name = outname.format(i)
                     if not osp.isfile(name):
-                        print("save image", name)
+                        # print("save image", name)
                         cv2.imwrite(name, frame)
-                    else:
-                        print("already exists", name)
+                    # else:
+                        # print("already exists", name)
 
                 if as_video:
                     out.write(frame)
@@ -181,3 +202,63 @@ def get_video(url, tofolder="data", as_images=False, as_video=False, crop=False,
             stream.release()
 
     cv2.destroyAllWindows()
+
+###
+# Memory management
+#
+
+# def estimate_memory_req():
+#     mem = psutil.virtual_memory()
+#     mem.available//2**30
+#     mem.used//2**30
+
+
+
+def get_smi(query):
+    _cmd = ['nvidia-smi', '--query-gpu=memory.%s'%query, '--format=csv,nounits,noheader']
+    return int(sp.check_output(_cmd, encoding='utf-8').split('\n')[0])
+
+class NvSMI:
+    """wrap to nvidia-smi"""
+    def __init__(self, units="MB"):
+        self.total = get_smi("total")
+        self.used = get_smi("used")
+        self.available = self.total - self.used
+        self.percent = round(100*self.used/self.total, 1)
+        self.units = units if units[0].upper() in ('G', 'M') else 'MB'
+        self._fix_units()
+
+    def _fix_units(self):
+        if self.units[0].upper() == "G":
+            self.units = "GB"
+            self.total //= 2**10
+            self.used //= 2**10
+            self.available //= 2**10
+
+    def __repr__(self):
+        return "GPU: ({})".format(self.__dict__)
+
+class CPU:
+    """ wrap to psutils to match NvSMI syntax"""
+    def __init__(self, units="MB"):
+        cpu = psutil.virtual_memory()
+        self.total = cpu.total
+        self.used = cpu.used
+        self.available= cpu.available
+        self.percent = cpu.percent
+        self.units = units if units[0].upper() in ('G', 'M') else 'MB'
+        self._fix_units()
+
+    def _fix_units(self):
+        _scale = 20
+        if self.units[0].upper() == "G":
+            self.units = "GB"
+            _scale = 30
+        else:
+            self.units = "MB"
+        self.total //= 2**_scale
+        self.used //= 2**_scale
+        self.available //= 2**_scale
+
+    def __repr__(self):
+        return "CPU: ({})".format(self.__dict__)
