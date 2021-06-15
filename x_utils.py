@@ -1,6 +1,7 @@
 """
 data utility functions
 """
+from typing import Any
 import subprocess as sp
 import os
 import os.path as osp
@@ -11,11 +12,13 @@ import psutil
 
 import numpy as np
 import cv2
+from PIL import Image
+import matplotlib.pyplot as plt
+import pandas as pd
 
 
 import hashlib
 import json
-from PIL import Image
 # pylint: disable=no-member
 
 ###
@@ -70,6 +73,7 @@ def _np_image(image, dtype='float32'):
         image = image.astype(dtype)
     return image
 
+
 ###
 # get video from url or file
 #
@@ -96,6 +100,8 @@ def get_video(url, tofolder="data", as_images=False, as_video=False, crop=False,
     url = "data/AFRC-2017-11522-2_G-III_Eclipse_Totality~orig.mp4"
     tofolder = "data/eclipse_512"
     >>> get_video(url, max_size=512, crop=True, frame_range=[6600, 8025], as_images=True, tofolder=tofolder, show=True, skip_frames=0)
+    >>> get_video(name, tofolder="data/eclipse_fullsq", as_images=True, crop=True, frame_range=[6600, 8025])
+
     """
     # https://images.nasa.gov/
     #url = "http://images-assets.nasa.gov/video/jsc2017m000793_2017Eclipse_4K_YT/jsc2017m000793_2017Eclipse_4K_YT~orig.mp4"
@@ -203,22 +209,93 @@ def get_video(url, tofolder="data", as_images=False, as_video=False, crop=False,
 
     cv2.destroyAllWindows()
 
-###
+# ###
 # Memory management
 #
+class EasyDict(dict):
+    """ dict with object access
+        delta function for iterable members
+    """
+    def __getattr__(self, name: str) -> Any:
+        try:
+            return self[name]
+        except KeyError:
+            raise AttributeError(name)
 
-# def estimate_memory_req():
-#     mem = psutil.virtual_memory()
-#     mem.available//2**30
-#     mem.used//2**30
+    def __setattr__(self, name: str, value: Any) -> None:
+        self[name] = value
 
+    def __delattr__(self, name: str) -> None:
+        del self[name]
+
+class EasyTrace(EasyDict):
+    """ dict with object access
+        delta function for iterable members
+    """
+    def __getattr__(self, name: str) -> Any:
+        try:
+            return self[name]
+        except KeyError:
+            raise AttributeError(name)
+
+    def __setattr__(self, name: str, value: Any) -> None:
+        self[name] = value
+
+    def __delattr__(self, name: str) -> None:
+        del self[name]
+
+    def delta(self, name, i=-1, j=-2):
+        """ return self[name][i] - self[name][j]"""
+        assert isinstance(self[name], (tuple, list, np.ndarray)), "cannot delta type {}".format(type(self[name]))
+        assert abs(i) <= len(self[name]) and abs(j) <= len(self[name]), "indices ({} {}) outside of range {}".format(i, j, len(self[name]))
+        return self[name][i] - self[name][j]
+
+class TraceMem(EasyTrace):
+    def __init__(self, units="MB"):
+        self.units = units
+        cpu = CPUse(units=self.units)
+        gpu = GPUse(units=self.units)
+
+        self.GPU = [gpu.available]
+        self.CPU = [cpu.available]
+
+        self.dGPU = [0]
+        self.dCPU = [0]
+
+        self.msg = ["Init"]
+        self.log_mem(cpu, gpu)
+
+    def log_mem(self, cpu, gpu):
+        print(f"  CPU: avail: {cpu.available} {self.units} \tused: {cpu.used} {self.units} ({cpu.percent}%)")
+        print(f"  GPU: avail: {gpu.available} {self.units} \tused: {gpu.used} {self.units} ({gpu.percent}%)")
+
+    def step(self, msg="", i=-2, j=-1, verbose=True):
+        cpu = CPUse(units=self.units)
+        gpu = GPUse(units=self.units)
+        self.CPU += [cpu.available]
+        self.GPU += [gpu.available]
+        self.msg +=[msg]
+        dCPU = self.delta('CPU', i=i, j=j)
+        dGPU = self.delta('GPU', i=i, j=j)
+        self.dGPU += [dGPU]
+        self.dCPU += [dCPU]
+
+        if verbose:
+            msg = msg + ": " if msg else ""
+
+            print(f"{msg}Used CPU {dCPU}, GPU {dGPU} {self.units}")
+            self.log_mem(cpu, gpu)
+    def log(self):
+        print("{:^6}{:>12}{:>12}{:>12}{:>12}".format("step", "CPU avail", "CPU added", "GPU avail", "GPU added"))
+        for i in range(len(self.GPU)):
+         print("{:^6}{:>12}{:>12}{:>12}{:>12}  {:<6}".format(i, f"{self.CPU[i]} {self.units}", f"({self.dCPU[i]})", f"{self.GPU[i]} {self.units}", f"({self.dGPU[i]})", self.msg[i]))
 
 
 def get_smi(query):
     _cmd = ['nvidia-smi', '--query-gpu=memory.%s'%query, '--format=csv,nounits,noheader']
     return int(sp.check_output(_cmd, encoding='utf-8').split('\n')[0])
 
-class NvSMI:
+class GPUse:
     """wrap to nvidia-smi"""
     def __init__(self, units="MB"):
         self.total = get_smi("total")
@@ -238,7 +315,7 @@ class NvSMI:
     def __repr__(self):
         return "GPU: ({})".format(self.__dict__)
 
-class CPU:
+class CPUse:
     """ wrap to psutils to match NvSMI syntax"""
     def __init__(self, units="MB"):
         cpu = psutil.virtual_memory()
@@ -262,3 +339,70 @@ class CPU:
 
     def __repr__(self):
         return "CPU: ({})".format(self.__dict__)
+
+def get_video_attrs(name):
+    """get size info from video header as
+        N, H, W, C
+    """
+    video = cv2.VideoCapture(name)
+    width = int(video.get(cv2.CAP_PROP_FRAME_WIDTH))
+    height = int(video.get(cv2.CAP_PROP_FRAME_HEIGHT))
+    frames = int(video.get(cv2.CAP_PROP_FRAME_COUNT))
+    channels = int(video.get(cv2.CAP_PROP_CHANNEL))
+    channels = channels if channels != 0 else 3
+    video.release()
+    # cv2.destroyAllWindows()
+    return np.array([frames, height, width, channels])
+
+def estimate_size(shape, dtype, units="MB"):
+    scale = {"B":1, "KB":2**10, "MB":2**20, "GB":2**30}
+    return np.product(np.asarray(shape)) * np.dtype(dtype).itemsize//scale[units]
+
+def estimate_load_size(video, dtype="float32", units="MB", frame_range=None, grad=False, verbose=False):
+    """ estimate size of a video or video folder
+        Args
+            video   (str) mp4, mov, image folder
+            dtype   (str[float32])
+            units   (str[MB]) | B | KB | MB | GB
+            grad    (bool[False]) | if true double estimate
+    """
+    if osp.isdir(video):
+        images = sorted([f.path for f in os.scandir(video)
+                         if f.name[-4:].lower() in (".png", ".jpg", ".jpeg")])
+
+        shape = np.array([len(images), *np.asarray(Image.open(images[0])).shape])
+    else:
+        shape = get_video_attrs(video)
+
+    if isinstance(frame_range, (list,tuple)):
+        frame_range = list(frame_range)
+        frame_range[1] = min(frame_range[1], shape[0])
+        shape[0] = frame_range[1] - frame_range[0]
+
+    size = estimate_size(shape, dtype, units)
+    if grad:
+        size *=2
+    if verbose:
+        print("video with shape {}, requires {} {}".format(shape.tolist(), size, units))
+    return size, shape.tolist()
+
+def plot_mem(fname):
+    assert osp.isfile(fname), f"memory trace {fname} not found"
+    mem = pd.read_csv(fname)
+    gpu = np.asarray(mem.GPUse/1024)
+    cpu = np.asarray(mem.CPUse/1024)
+
+    yticks=[cpu[0], gpu[0], cpu[-1],gpu[-1], cpu.max(), gpu.max()]
+    yticks = list(set([round(tick,2) for tick in yticks]))
+
+    dCPU = cpu[-1] - cpu[0]
+    dGPU = gpu[-1] - gpu[0]
+    plt.plot(cpu, label=f"CPU {round(dCPU, 2)}")
+    plt.plot(gpu, label=f"GPU {round(dGPU, 2)}")
+
+
+    plt.yticks(yticks)
+
+    plt.grid()
+    plt.legend()
+    plt.show()
