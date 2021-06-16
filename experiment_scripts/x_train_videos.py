@@ -1,4 +1,4 @@
-'''@x mod to train_video 
+'''@x mod to train_video
 for experimentatio
 
 
@@ -8,18 +8,21 @@ for experimentatio
 import sys
 import os
 import os.path as osp
-import psutil
+from functools import partial
+import logging
 
 import torch
 from torch.utils.data import DataLoader
 import configargparse
-from functools import partial
 # import skvideo.datasets
 
-sys.path.append( os.path.dirname( os.path.dirname( os.path.abspath(__file__) ) ) )
-import dataio, meta_modules, utils, training, loss_functions, modules
+_path =  os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+if _path not in sys.path:
+    sys.path.append(_path)
+import dataio, loss_functions, modules  # , meta_modules, utils, training
 import x_utils
-
+import x_training
+import x_dataio
 
 
 p = configargparse.ArgumentParser()
@@ -55,39 +58,45 @@ p.add_argument('--checkpoint_path', default=None, help='Checkpoint to trained mo
 
 opt = p.parse_args()
 
-mem = []
+# pylint: disable=no-member
+
+_units = "GB"
+M = x_utils.TraceMem(units=_units)
 if opt.verbose:
-    gpu = x_utils.NvSMI('MB')
-    cpu = x_utils.CPU('MB')
-    print("GPU", gpu)
-    print("CPU", cpu)
-    mem.append({'gpu': gpu.available, "cpu":cpu.available})
+    video_ram = x_utils.estimate_load_size(opt.video_path, units=_units, verbose=True)
+    if 2*video_ram >= M.CPU[-1]:
+        _ratio = M.CPU[-1]/video_ram
+        raise ValueError(f"Video Too big, reduce or process in range chunks < {_ratio} of video")
+
+# vid_dataset = dataio.Video(opt.video_path)
+# if opt.verbose:
+#     M.step(msg="Loaded Video")
+
+# uses 2x the ram as the video
+# TODO - optimize. coords -> function.
+#                   data: deleete vid_dataset it wont be used.
+# mgrid and
+
+# channels = vid_dataset.channels
+# coord_dataset = dataio.Implicit3DWrapper(vid_dataset, sidelength=vid_dataset.shape,
+#                                           sample_fraction=opt.sample_frac)
+# coord_dataset = dataio.CoordDataset3d(vid_dataset, sidelength=vid_dataset.shape,
+#                                           sample_fraction=opt.sample_frac)
+
+coord_dataset = x_dataio.VideoDataset(opt.video_path, frame_range=None, sample_fraction=opt.sample_frac)
+
+print("coord shape", coord_dataset.data.shape)
+print("op  sample_frac", opt.sample_frac)
+print("coord sample_frac", coord_dataset.sample_fraction)
+print("coord N_samples", coord_dataset.N_samples)
+print("coord self.mgrid.shape[0]", coord_dataset.mgrid.shape[0])
+channels = coord_dataset.channels
 
 
-vid_dataset = dataio.Video(opt.video_path)
-if opt.verbose:
-    cpu = x_utils.CPU('MB')
-    gpu = x_utils.NvSMI('MB')
-    _used = mem[-1]['cpu'] - cpu.available
-    print("loaded video {} with shape {}, using {} MB,  {} MB remain".format(opt.video_path,
-                                                              tuple(vid_dataset.vid.shape),
-                                                              _used, cpu.available))
-    mem.append({'gpu': gpu.available, "cpu":cpu.available})
+# del vid_dataset
 
 
-coord_dataset = dataio.Implicit3DWrapper(vid_dataset, sidelength=vid_dataset.shape,
-                                          sample_fraction=opt.sample_frac)
-if opt.verbose:
-    cpu = x_utils.CPU('MB')
-    gpu = x_utils.NvSMI('MB')
-    _used = mem[-1]['cpu'] - cpu.available
-
-    print("wrapped dataset")
-    print(f" mgrid {tuple(coord_dataset.mgrid.shape)}")
-    print(f" data {tuple(coord_dataset.data.shape)}")
-    print(" samples {}".format(coord_dataset.N_samples))
-    print("video uses {} MB, {} MB remain".format(_used, cpu.available))
-    mem.append({'gpu': gpu.available, "cpu":cpu.available})
+M.step(msg="Coord Dataset", verbose=opt.verbose)
 
 dataloader = DataLoader(coord_dataset, shuffle=True, batch_size=opt.batch_size, pin_memory=True,
                         num_workers=0)
@@ -96,32 +105,35 @@ if opt.verbose:
 
 # Define the model.
 if opt.model_type == 'sine' or opt.model_type == 'relu' or opt.model_type == 'tanh':
-    model = modules.SingleBVPNet(type=opt.model_type, in_features=3, out_features=vid_dataset.channels,
+    model = modules.SingleBVPNet(type=opt.model_type, in_features=3, out_features=channels,
                                  mode='mlp', hidden_features=1024, num_hidden_layers=3)
 elif opt.model_type == 'rbf' or opt.model_type == 'nerf':
-    model = modules.SingleBVPNet(type='relu', in_features=3, out_features=vid_dataset.channels, mode=opt.model_type)
+    model = modules.SingleBVPNet(type='relu', in_features=3, out_features=channels, mode=opt.model_type)
 else:
     raise NotImplementedError
+M.step(msg="model cpu", verbose=opt.verbose)
 
 if opt.checkpoint_path is not None and osp.isdir(opt.checkpoint_path):
     model.load_state_dict(torch.load(opt.checkpoint_path))
 
 model.cuda()
-if opt.verbose:
-    params = sum([p.numel() for p in model.parameters()])
-    gpuse = torch.cuda.max_memory_reserved()/2**30
-    cpu = x_utils.CPU('MB')
-    gpu = x_utils.NvSMI('MB')
-    _used = mem[-1]['cpu'] - cpu.available
-    print("loaded model: {} parameters, torch uses {} GB".format(params, gpuse))
+M.step(msg=f"model cuda, params {sum([p.numel() for p in model.parameters()])}", verbose=opt.verbose)
 
 root_path = os.path.join(opt.logging_root, opt.experiment_name)
 
 # Define the loss
 loss_fn = partial(loss_functions.image_mse, None)
-summary_fn = partial(utils.write_video_summary, vid_dataset)
+# summary_fn = partial(utils.write_video_summary, vid_dataset)
+#  summary_fn=summary_fn, remove tensorboard
 
-training.train(model=model, train_dataloader=dataloader, epochs=opt.num_epochs, lr=opt.lr,
-               steps_til_summary=opt.steps_til_summary, epochs_til_checkpoint=opt.epochs_til_ckpt,
-               model_dir=root_path, loss_fn=loss_fn, summary_fn=summary_fn,
-               verbose=opt.verbose)
+M.log()
+# try:
+#     x_training.train(model=model, train_dataloader=dataloader, epochs=opt.num_epochs, lr=opt.lr,
+#                 steps_til_summary=opt.steps_til_summary, epochs_til_checkpoint=opt.epochs_til_ckpt,
+#                 model_dir=root_path, loss_fn=loss_fn,
+#                 verbose=opt.verbose)
+# except Exception as _e:
+#     logging.exception( f"Premature interruption: {root_path}")
+# finally:
+#     torch.cuda.synchronize()
+#     torch.cuda.empty_cache()

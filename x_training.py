@@ -92,21 +92,6 @@ def train(model, train_dataloader, epochs, lr, steps_til_summary, epochs_til_che
                                                                                         tuple(model_input[mk[0]].shape),
                                                                                         tuple(gt[gk[0]].shape), gpuse))
 
-            # if double_precision:
-            #     model_input = {key: value.double() for key, value in model_input.items()}
-            #     gt = {key: value.double() for key, value in gt.items()}
-
-            # if use_lbfgs:
-            #     def closure():
-            #         optim.zero_grad()
-            #         model_output = model(model_input)
-            #         losses = loss_fn(model_output, gt)
-            #         train_loss = 0.
-            #         for loss_name, loss in losses.items():
-            #             train_loss += loss.mean()
-            #         train_loss.backward()
-            #         return train_loss
-            #     optim.step(closure)
 
             model_output = model(model_input)
             losses = loss_fn(model_output, gt)

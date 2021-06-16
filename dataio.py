@@ -16,7 +16,8 @@ from PIL import Image
 from torch.utils.data import Dataset
 from torchvision.transforms import Resize, Compose, ToTensor, Normalize
 
-
+# pylint: disable=no-member
+# pylint: disable=not-callable
 def get_mgrid(sidelen, dim=2):
     '''Generates a flattened grid of (x,y,...) coordinates in a range of -1 to 1.'''
     if isinstance(sidelen, int):
@@ -443,19 +444,27 @@ class PointCloud(Dataset):
 
 
 class Video(Dataset):
-    def __init__(self, path_to_video):
+    """  Video Datastet, .npy, mp4, image foldr
+        frame_range = only a few frames.
+    """
+    def __init__(self, path_to_video, frame_range=None):
         super().__init__()
         if 'npy' in path_to_video:
             self.vid = np.load(path_to_video)
+
         elif 'mp4' in path_to_video:
             self.vid = skvideo.io.vread(path_to_video).astype(np.single) / 255.
 
-        elif os.path.isdir(path_to_video): # x added image list
-            images = sorted([f.path for f in os.scandir(path_to_video) if f.name[-4:].lower() in (".png", ".jpg", ".jpeg")])
+        elif os.path.isdir(path_to_video):
+            images = sorted([f.path for f in os.scandir(path_to_video)
+                             if f.name[-4:].lower() in (".png", ".jpg", ".jpeg")])
+            if frame_range is not None:
+                images = images[frame_range[0]:frame_range[1]]
             dataset = []
             for i, image in enumerate(images):
               dataset.append((np.asarray(Image.open(image)).astype(np.float32))/255)
             self.vid = np.stack(dataset, axis=0)
+
         self.shape = self.vid.shape[:-1]
         self.channels = self.vid.shape[-1]
 
@@ -655,6 +664,7 @@ class Implicit3DWrapper(torch.utils.data.Dataset):
             sidelength = 3 * (sidelength,)
 
         self.dataset = dataset
+
         self.mgrid = get_mgrid(sidelength, dim=3)
         data = (torch.from_numpy(self.dataset[0]) - 0.5) / 0.5
         self.data = data.view(-1, self.dataset.channels)
@@ -677,6 +687,90 @@ class Implicit3DWrapper(torch.utils.data.Dataset):
         gt_dict = {'img': data}
 
         return in_dict, gt_dict
+
+
+class CoordDataset3d(torch.utils.data.Dataset):
+    """ like Implicit3DWrapper, delete incoming dataset
+        TODO, can the mgrid be chunked and offset
+            load item index
+    """
+    def __init__(self, dataset, sidelength=None, sample_fraction=1.):
+
+        if isinstance(sidelength, int):
+            sidelength = 3 * (sidelength,)
+
+        self._len = len(dataset)
+        self.channels = dataset.channels
+        self.data = ((torch.from_numpy(dataset[0]) - 0.5) / 0.5).view(-1, self.channels)
+        del dataset # clean up ram
+
+        self.mgrid = get_mgrid(sidelength, dim=3)
+        self.sample_fraction = sample_fraction
+        self.N_samples = int(self.sample_fraction * self.mgrid.shape[0])
+
+    def __len__(self):
+        return self._len
+
+    def __getitem__(self, idx):
+        if self.sample_fraction < 1.:
+            coord_idx = torch.randint(0, self.data.shape[0], (self.N_samples,))
+            data = self.data[coord_idx, :]
+            coords = self.mgrid[coord_idx, :]
+        else:
+            coords = self.mgrid
+            data = self.data
+
+        in_dict = {'idx': idx, 'coords': coords}
+        gt_dict = {'img': data}
+
+        return in_dict, gt_dict
+
+class VideoDataset(Dataset):
+    """  Video Datastet, .npy, mp4, image foldr
+        frame_range = only a few frames.
+
+    """
+    def __init__(self, path_to_video, frame_range=None, sample_fraction=1., device="cpu"):
+        super().__init__()
+        # if 'npy' in path_to_video:
+        #     self.vid = np.load(path_to_video)
+        # elif 'mp4' in path_to_video:
+        #     self.vid = skvideo.io.vread(path_to_video).astype(np.single) / 255.
+
+        if os.path.isdir(path_to_video):
+            open_tensor = lambda x, device="cuda": torch.as_tensor((np.asarray(Image.open(x), dtype=np.float32) - 127.5)/127.5, device=device)
+            images = sorted([f.path for f in os.scandir(path_to_video)
+                             if f.name[-4:].lower() in (".png", ".jpg", ".jpeg")])
+            if frame_range is not None:
+                images = images[frame_range[0]:frame_range[1]]
+
+            self.data = torch.stack([open_tensor(image) for image in images], dim=0)
+            self.channels = self.data.shape[-1]
+        else:
+            raise NotImplementedError("mp4, mov not yet implemented")
+
+        self.mgrid = get_mgrid(self.data.shape[:-1], dim=3)
+        self.sample_fraction = sample_fraction
+        self.N_samples = int(self.sample_fraction * self.mgrid.shape[0])
+
+
+    def __len__(self):
+        return 1
+    
+    def __getitem__(self, idx):
+        if self.sample_fraction < 1.:
+            coord_idx = torch.randint(0, self.data.shape[0], (self.N_samples,))
+            data = self.data[coord_idx, :]
+            coords = self.mgrid[coord_idx, :]
+        else:
+            coords = self.mgrid
+            data = self.data
+
+        in_dict = {'idx': idx, 'coords': coords}
+        gt_dict = {'img': data}
+
+        return in_dict, gt_dict
+
 
 
 class ImageGeneralizationWrapper(torch.utils.data.Dataset):
