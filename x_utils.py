@@ -5,7 +5,7 @@ from typing import Any
 import subprocess as sp
 import os
 import os.path as osp
-from urllib.parse import urlparse
+from urllib.parse import non_hierarchical, urlparse
 from io import BytesIO
 import requests
 import psutil
@@ -15,6 +15,7 @@ import cv2
 from PIL import Image
 import matplotlib.pyplot as plt
 import pandas as pd
+import yaml
 
 
 import hashlib
@@ -79,6 +80,7 @@ def _np_image(image, dtype='float32'):
 #
 def get_video(url, tofolder="data", as_images=False, as_video=False, crop=False, max_size=None, show=True, frame_range=None, skip_frames=0):
     """ load video from folder or url
+    default just plays it
     Args
         url         (str) url or filename
         tofolder    (str ['data']) if as_images or as_video, save to folder
@@ -111,6 +113,7 @@ def get_video(url, tofolder="data", as_images=False, as_video=False, crop=False,
     video = None
     out = None
     try:
+        cv2.startWindowThread()
         video = cv2.VideoCapture(url)
         size = [int(video.get(3)), int(video.get(4))]
 
@@ -208,6 +211,11 @@ def get_video(url, tofolder="data", as_images=False, as_video=False, crop=False,
             stream.release()
 
     cv2.destroyAllWindows()
+    print(f"closed {url}")
+    print(" frames:", count)
+    print(" size:  ", size)
+    print(" fps:   ", fps)
+    print(" fourcc:", hex(fourcc))
 
 # ###
 # Memory management
@@ -387,6 +395,8 @@ def estimate_load_size(video, dtype="float32", units="MB", frame_range=None, gra
     return size, shape.tolist()
 
 def plot_mem(fname):
+    """ plots graphs captuyred with ~/shh/memuse.sh
+    """
     assert osp.isfile(fname), f"memory trace {fname} not found"
     mem = pd.read_csv(fname)
     gpu = np.asarray(mem.GPUse/1024)
@@ -406,3 +416,96 @@ def plot_mem(fname):
     plt.grid()
     plt.legend()
     plt.show()
+
+###
+#
+# yaml config file utils
+#
+def get_abspath(fname):
+    _fname = osp.abspath(osp.expanduser(fname))
+    __fname = osp.abspath(osp.join(osp.split(__file__)[0], fname))
+
+    for f in [_fname, __fname, fname]:
+        if osp.exists(f):
+            return f
+    return fname
+
+def read_config(config_file):
+    """ reads yaml configs from expermients"""
+    with open(config_file, "r") as _fi:
+        data = yaml.load(_fi, Loader=yaml.FullLoader)
+    opt =  EasyDict(data)
+    for key in opt:
+        if "path" in key and isinstance(opt[key], str):
+            opt[key] = get_abspath(opt[key])
+    for o in opt:
+        if opt[o] == "None":
+            opt[o] = None
+    return opt
+
+
+###
+#
+def siren_latent_num(in_features=3, hidden_features=1024, out_features=3, hidden_layers=3,
+                       bias_latent=1, outermost_linear=1):
+    """ number of operations in siren
+    """
+    latent_ops = 2 + bias_latent # x=x*w, x=x+b, x=sin(x)
+    features = in_features + out_features * (2-outermost_linear)
+    features += (hidden_layers + 1) *  hidden_features * latent_ops
+    return features
+
+def siren_param_num(in_features=3, hidden_features=1024, out_features=3, hidden_layers=3):
+    """ number of parameters of an even width MLP with weight and bias
+    """
+    num_params = (in_features + 1) * hidden_features # first: weights + bias
+    num_params += (hidden_layers + 1) * (hidden_features + 1) * hidden_features # hidden
+    num_params += (hidden_features + 1) * out_features # last
+    return num_params
+
+def estimate_siren_cost(samples, in_features=3, out_features=3, hidden_features=1024, hidden_layers=3,
+                        byte_depth=4, grad=1, bias_latent=1, outermost_linear=1, **kwargs):
+    """
+    estimates the GPU load required for siren
+    """
+    _bytes = byte_depth * (1 + grad)
+
+    # layers params
+    l_weights = siren_param_num(in_features, hidden_features, out_features,
+                                hidden_layers) * _bytes
+
+    # latent size
+    features = siren_latent_num(in_features, hidden_features, out_features, hidden_layers,
+                                bias_latent, outermost_linear)
+
+    l_latents = samples * features * _bytes
+
+    return l_latents + l_weights
+
+def estimate_samples(gpu_avail, units="MB", in_features=3, out_features=3, hidden_features=1024, hidden_layers=3,
+                        byte_depth=4, grad=1, bias_latent=1, outermost_linear=1, **kwargs):
+    """
+    estimate max number of samples that a siren model can take in - given a GPU budget
+    bias_latent : test if bias operation makes separate latent
+    operations are efficient, number of samples that can be loaded is 2x the estimate.
+
+    """
+    scale = {"KB":2**10, "MB":2**20, "GB":2**30}[units]
+    _bytes = byte_depth * (1 + grad) / scale
+
+    # remove fixed cost of model
+    l_weights = siren_param_num(in_features, hidden_features, out_features,
+                                hidden_layers) * _bytes
+    gpu_avail -= l_weights
+
+    features = siren_latent_num(in_features, hidden_features, out_features, hidden_layers,
+                                bias_latent, outermost_linear) * _bytes
+
+    return int(gpu_avail // features)
+
+def estimate_frames(gpu_avail, frame_size, units="MB", in_features=3, out_features=3, hidden_features=1024, hidden_layers=3,
+                        byte_depth=4, grad=1, bias_latent=1, outermost_linear=1, **kwargs):
+    samples = estimate_samples(gpu_avail=gpu_avail, units=units, in_features=in_features, out_features=out_features,
+                               hidden_features=hidden_features, hidden_layers=hidden_layers,  byte_depth=byte_depth,
+                               grad=grad, bias_latent=bias_latent, outermost_linear=outermost_linear, **kwargs)
+    return samples // np.prod(frame_size)

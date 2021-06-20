@@ -1,10 +1,12 @@
 """
 simple loggers
 """
+import sys
 import os
 import os.path as osp
 import numpy as np
 import pandas as pd
+import matplotlib.pyplot as plt
 
 class PLog:
     """ simple logger based in pandas
@@ -124,3 +126,59 @@ class PLog:
                 print("\t".join(list(self.values.keys())))
             print("\t".join([str(l[0]).replace("nan", "") for l in self.values.values()]),
                   **self._end)
+
+def plotlog(logname, column="Loss", figsize=(10,5), title=None, label=None, show=True):
+    """ plots column [Loss] from csv file
+    if column 'Epoch' exists, ticks them
+    Args
+        logname     (str) csv. file
+        column      (str ['Loss']) column to plot
+
+    """
+
+    assert osp.isfile(logname), f"log file {logname} not found"
+
+    df = pd.read_csv(logname)
+    assert column in df, f"column {column} not found in {list(df.columns)}"
+
+    if figsize is not None:
+        plt.figure(figsize=figsize)
+    if title is not None:
+        plt.title(title)
+    kwargs = {}
+    if label is not None:
+        kwargs["label"] = label
+
+    plt.plot(df[column], **kwargs)
+
+    if "Epoch" in df:
+        epochs = np.unique(df.Epoch)
+        ticks = [len(df[df.Epoch == e]) for e in epochs]
+        plt.xticks(np.cumsum(ticks), epochs+1)
+        plt.xlabel("Epochs")
+    plt.grid()
+
+    if show:
+        plt.show()
+
+def _parseargs(args):
+    name = "train.csv"
+    col = "Loss"
+    if not args:
+        name = osp.join(os.getcwd(), name)
+    else:
+        if osp.isfile(args[0]):
+            name = args[0]
+        elif osp.isdir(args[0]):
+            name = osp.join(args[0], name)
+        if len(args) > 1:
+            col = args[1]
+    assert osp.isfile(name), f" file {name} not found"
+    return name, col
+
+if __name__ == "__main__":
+    """ Example
+    python x_log.py <csv_file | folder_containing_'train.csv'> <column_name default:[Loss]>
+    python x_log.py /media/z/Malatesta/zXb/share/siren/eclipse_512_sub
+    """
+    plotlog(*_parseargs(sys.argv[1:]))

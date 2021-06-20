@@ -4,28 +4,25 @@ import os
 import os.path as osp
 import time
 import shutil
+import logging
+from x_infer import load_state_dict
 
 import torch
-# import utils
-# from torch.utils.tensorboard import SummaryWriter
-# from tqdm.autonotebook import tqdm
-import numpy as np
+from torch.utils.data import DataLoader
 
 
-from x_utils import GPUse, CPUse
+import x_utils
+import x_dataio
+import x_modules
 from x_log import PLog
 
-
-# if opt.verbose:
-#     params = sum([p.numel() for p in model.parameters()])
-#     gpuse = torch.cuda.max_memory_reserved()/2**30
-#     print("loaded model: {} parameters, {} GB VRAM".format(params, gpuse))
 
 # remove tensorflue
 # remove tqdm
 # add panda log
 # remove text loss
 
+# pylint: disable=no-member
 def _continue(folder, init=False, cleanup=False):
     """
     Create place holder file. Kill file to stop training.
@@ -41,9 +38,24 @@ def _continue(folder, init=False, cleanup=False):
             return _cont
     return False
 
-def train(model, train_dataloader, epochs, lr, steps_til_summary, epochs_til_checkpoint, model_dir, loss_fn,
-          summary_fn=None, val_dataloader=None, double_precision=False, clip_grad=False, use_lbfgs=False, loss_schedules=None,
-          verbose=0):
+def _prevent_overwrite(folder, model):
+
+    if osp.exists(folder):
+        val = input("The model directory %s exists. Overwrite? (y/n)"%folder)
+        if val == 'y':
+            shutil.rmtree(folder)
+        else:
+            checkpoint = osp.join(folder, "model_final.pth")
+            if not osp.isfile(checkpoint):
+                checks = sorted([f.path for f in os.scandir(folder) if ".pth" in f.name])
+                checkpoint = checks[-1] if checks else None
+
+            if checkpoint is not None:
+                state_dict = torch.load(checkpoint)
+                model.load_state_dict(state_dict)
+    os.makedirs(folder, exist_ok=True)
+
+def train(model, train_dataloader, epochs, lr, epochs_til_checkpoint, model_dir, dataset):
 
     optim = torch.optim.Adam(lr=lr, params=model.parameters())
 
@@ -53,22 +65,19 @@ def train(model, train_dataloader, epochs, lr, steps_til_summary, epochs_til_che
     #     optim = torch.optim.LBFGS(lr=lr, params=model.parameters(), max_iter=50000, max_eval=50000,
     #                               history_size=50, line_search_fn='strong_wolfe')
 
-    if osp.exists(model_dir):
-        val = input("The model directory %s exists. Overwrite? (y/n)"%model_dir)
-        if val == 'y':
-            shutil.rmtree(model_dir)
-    os.makedirs(model_dir)
+
+    _prevent_overwrite(model_dir, model)
 
     log = PLog(osp.join(model_dir, "train.csv"))
-    vallog = PLog(osp.join(model_dir, "val.csv"))
 
     _continue(model_dir, init=True)
     total_steps = 0
     total_time = 0
     start_time = time.time()
 
-
     for epoch in range(epochs):
+        if epoch:
+            dataset.shuffle()
         if not _continue(model_dir):
             break
 
@@ -76,79 +85,34 @@ def train(model, train_dataloader, epochs, lr, steps_til_summary, epochs_til_che
             torch.save(model.state_dict(), osp.join(model_dir, 'model_epoch_%04d.pth' % epoch))
 
         for step, (model_input, gt) in enumerate(train_dataloader):
-            log.collect(**{"Epoch":epoch, "Step":total_steps})
+            log.collect(**{"Epoch":epoch, "Step":step})
 
-            model_input = {key: value.cuda() for key, value in model_input.items()}
-            gt = {key: value.cuda() for key, value in gt.items()}
+            pos = model_input["coords"].cuda()
+            target = gt["img"].cuda()
 
-            gpuse = torch.cuda.max_memory_reserved()/2**30
             log.collect(**{"tGPU":torch.cuda.max_memory_reserved()//2**20})
-            log.collect(**{"GPU":GPUse().used, "CPU":CPUse().used})
-            if verbose and total_steps == 0:
-                mk = list(model_input.keys())
-                gk = list(gt.keys())
-                gpuse = torch.cuda.max_memory_reserved()/2**30
-                print("step {}\t input_items {}\t item_size {}\t gt_size {}\t, gpu {} GB".format(step,  len(model_input.items()),
-                                                                                        tuple(model_input[mk[0]].shape),
-                                                                                        tuple(gt[gk[0]].shape), gpuse))
+            log.collect(**{"GPU":x_utils.GPUse().used, "CPU":x_utils.CPUse().used})
 
+            pred = model(pos)
+            loss = ((target -pred)**2).mean()
 
-            model_output = model(model_input)
-            losses = loss_fn(model_output, gt)
-            if verbose and total_steps == 0:
-                print("losses {}".format(len(losses)))
+            log.collect(**{"Loss":loss.cpu().item()})
 
-            train_loss = 0.
-            for loss_name, loss in losses.items():
-                single_loss = loss.mean()
-
-                if loss_schedules is not None and loss_name in loss_schedules:
-                    single_loss *= loss_schedules[loss_name](total_steps)
-
-                train_loss += single_loss
-
-            log.collect(**{"TrainLoss":train_loss.item()})
-
-            if not total_steps % steps_til_summary:
-                torch.save(model.state_dict(), osp.join(model_dir, 'model_current.pth'))
-
-            # if not use_lbfgs:
             optim.zero_grad()
-            train_loss.backward()
-
-            if clip_grad:
-                if isinstance(clip_grad, bool):
-                    torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=1.)
-                else:
-                    torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=clip_grad)
+            loss.backward()
             optim.step()
 
-            if not total_steps % steps_til_summary:
-
-                if val_dataloader is not None:
-                    print("\nRunning validation set...")
-                    model.eval()
-                    with torch.no_grad():
-                        val_losses = []
-                        for (model_input, gt) in val_dataloader:
-                            model_output = model(model_input)
-                            val_loss = loss_fn(model_output, gt)
-                            val_losses.append(val_loss.item())
-                            vallog.write(**{"Epoch":epoch, "Step":total_steps, "Loss":val_loss.item() })
-
-                    model.train()
             total_steps += 1
 
             total_time = time.time() - start_time
             _time = round(total_time/total_steps, 2)
             total_time = round(total_time, 1)
 
-            log.write(Time=_time, Total_Tile=total_time)
+            log.write(Time=_time, Total_Time=total_time)
 
-    torch.save(model.state_dict(),osp.join(model_dir, 'model_final.pth'))
+    torch.save(model.state_dict(), osp.join(model_dir, 'model_final.pth'))
 
     _continue(model_dir, cleanup=True)
-
 
 class LinearDecaySchedule():
     def __init__(self, start_val, final_val, num_steps):
@@ -158,3 +122,57 @@ class LinearDecaySchedule():
 
     def __call__(self, iter):
         return self.start_val + (self.final_val - self.start_val) * min(iter / self.num_steps, 1.)
+
+
+def train_video(config_file="experiment_scripts/x_eclipse_5122.yml", verbose=1):
+    """  simple trainer
+    """
+    try:
+        opt = x_utils.read_config(config_file)
+        if verbose:
+            print(opt)
+        # if opt.train_type = "video"
+
+        ####
+        # Memory
+        # CUDA: estimate sample size to maximize cuda utilization
+        # operations are efficient, sample size can be ~2x the estimate
+        # TODO: estimate CPU and add frame range so CPU wont blow up
+
+        # init cuda
+        z = torch.ones([1]).cuda()
+        gpus = x_utils.GPUse()
+        if verbose:
+            print(gpus)
+
+        # if opt.sample_frac is None: # just do it
+        max_samples = x_utils.estimate_samples(gpus.available, **opt["siren"])
+        if verbose:
+            print(f"max sample to fit within {gpus.available}MB Cuda: {max_samples}, duplicated to {2*max_samples}")
+        max_samples *= 2
+
+        # dataset
+        dset = x_dataio.VideoDataset(opt.data_path, sample_size=max_samples, frame_range=opt.frame_range)
+        if verbose:
+            print(f"Creating dataset of {len(dset)}, data loaded size {dset.data.shape} with mgrid of same size")
+        # shuffle false as since shuffle is incorporated into the dataset. TODO simplify
+        dataloader = DataLoader(dset, shuffle=False, batch_size=1, pin_memory=True, num_workers=0)
+
+        # model
+        model = x_modules.Siren(**opt["siren"])
+        model.cuda()
+        # optim = torch.optim.Adam(lr=opt.lr, params=model.parameters())
+        # loss_fn = lambda x,y: ((x-y)**2).mean()
+
+        # log
+        folder = osp.join(opt.logging_root, opt.experiment_name)
+
+        train(model, dataloader, opt.num_epochs, opt.lr, opt.epochs_til_checkpoint, folder, dset)
+
+
+    except Exception as _e:
+        logging.exception("train_video fails")
+
+    finally:
+        torch.cuda.synchronize()
+        torch.cuda.empty_cache()
