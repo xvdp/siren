@@ -1,12 +1,48 @@
 """
 simple loggers
+* logging wrapper
+* pands train logger
+* plot train logger
 """
 import sys
 import os
 import os.path as osp
+import logging
 import numpy as np
 import pandas as pd
 import matplotlib.pyplot as plt
+
+##
+# logging based loggers
+#
+def logger(name, level=20, terminator="\n"):
+    """ level DEBUG = 10, defaults INFO 20, if None defaults to system WARNING
+
+    Example:
+        >>> from x_log import logger
+        >>> log = logger("FunctionLog")
+        >>> log[1].terminator = "\r"
+        >>> for i in range(20)"
+        >>>     log[0].info(f" iterating {i}")
+        >>> log[1].terminator = "\n"
+        >>> log[1].flush()
+    """
+    logger = logging.getLogger(name)
+    if level is not None:
+        logger.setLevel(level)
+    if not logger.handlers:
+        stream = logging.StreamHandler()
+        if level is not None:
+            stream.setLevel(level)
+        formatter = logging.Formatter('Siren: %(name)s - %(levelname)s - %(message)s')
+        stream.setFormatter(formatter)
+        logger.addHandler(stream)
+    else:
+        stream = logger.handlers[0]
+
+    stream.terminator = terminator
+
+    return logger, stream
 
 class PLog:
     """ simple logger based in pandas
@@ -137,6 +173,7 @@ def plotlog(logname, column="Loss", figsize=(10,5), title=None, label=None, show
     """
 
     assert osp.isfile(logname), f"log file {logname} not found"
+    _maxtick = 21
 
     df = pd.read_csv(logname)
     assert column in df, f"column {column} not found in {list(df.columns)}"
@@ -145,18 +182,36 @@ def plotlog(logname, column="Loss", figsize=(10,5), title=None, label=None, show
         plt.figure(figsize=figsize)
     if title is not None:
         plt.title(title)
+    y = np.asarray(df[column])
+
     kwargs = {}
     if label is not None:
         kwargs["label"] = label
+    else:
+        kwargs["label"] = column
+    kwargs["label"] += f" {np.round(y.min(), 4)}"
+    kwargs["markevery"] = [np.argmin(y)]
+    kwargs["marker"] = 'v'
+    plt.plot(y, **kwargs)
 
-    plt.plot(df[column], **kwargs)
+    _info = f"Iters {len(df)}"
+    if "Total_Time" in df:
+        _info += f"\nTime {df.Total_Time.iloc[-1]}s"
+
+    plt.scatter(0,0, s=1, label=_info)
 
     if "Epoch" in df:
         epochs = np.unique(df.Epoch)
-        ticks = [len(df[df.Epoch == e]) for e in epochs]
-        plt.xticks(np.cumsum(ticks), epochs+1)
+        if len(epochs) > _maxtick:
+            epochs = epochs[ np.linspace(0, epochs[-1], _maxtick).astype(np.int64)]
+    
+        xlabels = [df.index[df.Epoch == e].values[0] for e in epochs]
+        plt.xticks(xlabels, epochs+1)
         plt.xlabel("Epochs")
+
     plt.grid()
+    if "label" in kwargs:
+        plt.legend()
 
     if show:
         plt.show()

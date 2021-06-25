@@ -15,6 +15,7 @@ class Siren(nn.Module):
     * Disabled the Hypernetowrks for now
     * Disable the detaching and cloning coordinates - need to be passed detatched when required
     * Changed default outermost_linear = True to match example defaults
+    * input tensor, output tensor, not dict
     """
     def __init__(self, in_features, hidden_features, hidden_layers, out_features,
                  outermost_linear=True, first_omega_0=30, hidden_omega_0=30.):

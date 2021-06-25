@@ -5,6 +5,7 @@ from typing import Any
 import subprocess as sp
 import os
 import os.path as osp
+import shutil
 from urllib.parse import non_hierarchical, urlparse
 from io import BytesIO
 import requests
@@ -16,6 +17,8 @@ from PIL import Image
 import matplotlib.pyplot as plt
 import pandas as pd
 import yaml
+import logging
+import x_log
 
 
 import hashlib
@@ -217,12 +220,60 @@ def get_video(url, tofolder="data", as_images=False, as_video=False, crop=False,
     print(" fps:   ", fps)
     print(" fourcc:", hex(fourcc))
 
+def scale_min_side(image, size=512):
+    """ rescale minimum side to size
+    """
+    _size = list(image.shape[:2])
+    _i = np.argmax(_size)
+    _large = max(_size)*size//min(_size)
+    _size[1 - _i] = _large
+    _size[_i] = size
+    image = cv2.resize(image, _size, interpolation=cv2.INTER_CUBIC)
+    return image
+
+
+def preprocess_images(src, dst, size=512, crop=True, loglevel=20, force=False):
+    """ scales and crops images in src folder saves in dst
+        crop: square crop
+    """
+    log = x_log.logger("VideoDataset", level=loglevel)
+    
+    files = sorted([f.path for f in os.scandir(src) if osp.splitext(f.name)[1].lower() in (".jpg", ".jpeg", ".png")])
+    if not files:
+        log[0].warning(f"no images found in {src}, nothing done")
+        return
+    os.makedirs(dst, exist_ok=True)
+    if os.listdir(dst):
+        if force:
+            shutil.rmtree(dst)
+            os.makedirs(dst)
+        else:
+            log[0].warning(f"not empty {dst}, nothing done")
+            return
+    log[1].terminator = "\r"
+    for i, name in enumerate(files):
+        log[0].debug(f"\n <{name}> is file {osp.isfile(name)}")
+        image = cv2.imread(name)
+        image = scale_min_side(image)
+
+        if crop:
+            _y, _x = image.shape[:2]
+            _y = (_y - size)//2
+            _x = (_x - size)//2
+            image = image[_y:_y+size, _x:_x+size]
+
+        dstname = osp.join(dst, osp.basename(name))
+        cv2.imwrite(dstname, image)
+        log[0].info(f" {i} of {len(files)} Saved image size {size} to {dstname} ")
+    log[1].terminator = "\n"
+    log[0].info(f"\nSaved {len(files)} files to {dst}")
+
 # ###
 # Memory management
 #
 class EasyDict(dict):
-    """ dict with object access
-        delta function for iterable members
+    """ dict with object access similar to code used by NVidia stylegan
+        different from EasyDict in pypi
     """
     def __getattr__(self, name: str) -> Any:
         try:
@@ -235,6 +286,12 @@ class EasyDict(dict):
 
     def __delattr__(self, name: str) -> None:
         del self[name]
+    
+    def to_yaml(self, name):
+        """ save to yaml"""
+        os.makedirs(osp.split(name)[0], exist_ok=True)
+        with open(name, 'w') as fi:
+            yaml.dump(dict(self), fi)
 
 class EasyTrace(EasyDict):
     """ dict with object access
@@ -430,11 +487,15 @@ def get_abspath(fname):
             return f
     return fname
 
-def read_config(config_file):
+def read_config(config_file, defaults=None):
     """ reads yaml configs from expermients"""
     with open(config_file, "r") as _fi:
         data = yaml.load(_fi, Loader=yaml.FullLoader)
-    opt =  EasyDict(data)
+
+    opt = EasyDict()
+    if isinstance(defaults, dict):
+        opt.update(defaults)
+    opt.update(data)
     for key in opt:
         if "path" in key and isinstance(opt[key], str):
             opt[key] = get_abspath(opt[key])
@@ -443,14 +504,14 @@ def read_config(config_file):
             opt[o] = None
     return opt
 
-
 ###
+# rough memory estimate
 #
 def siren_latent_num(in_features=3, hidden_features=1024, out_features=3, hidden_layers=3,
-                       bias_latent=1, outermost_linear=1):
+                       include_bias=1, outermost_linear=1):
     """ number of operations in siren
     """
-    latent_ops = 2 + bias_latent # x=x*w, x=x+b, x=sin(x)
+    latent_ops = 2 + include_bias # x=x*w, x=x+b, x=sin(x)
     features = in_features + out_features * (2-outermost_linear)
     features += (hidden_layers + 1) *  hidden_features * latent_ops
     return features
@@ -464,7 +525,7 @@ def siren_param_num(in_features=3, hidden_features=1024, out_features=3, hidden_
     return num_params
 
 def estimate_siren_cost(samples, in_features=3, out_features=3, hidden_features=1024, hidden_layers=3,
-                        byte_depth=4, grad=1, bias_latent=1, outermost_linear=1, **kwargs):
+                        byte_depth=4, grad=1, include_bias=1, outermost_linear=1, **kwargs):
     """
     estimates the GPU load required for siren
     """
@@ -476,36 +537,71 @@ def estimate_siren_cost(samples, in_features=3, out_features=3, hidden_features=
 
     # latent size
     features = siren_latent_num(in_features, hidden_features, out_features, hidden_layers,
-                                bias_latent, outermost_linear)
+                                include_bias, outermost_linear)
 
     l_latents = samples * features * _bytes
 
     return l_latents + l_weights
 
-def estimate_samples(gpu_avail, units="MB", in_features=3, out_features=3, hidden_features=1024, hidden_layers=3,
-                        byte_depth=4, grad=1, bias_latent=1, outermost_linear=1, **kwargs):
-    """
-    estimate max number of samples that a siren model can take in - given a GPU budget
-    bias_latent : test if bias operation makes separate latent
-    operations are efficient, number of samples that can be loaded is 2x the estimate.
+def estimate_samples(gpu_avail=None, units="MB", in_features=3, out_features=3,
+                     hidden_features=1024, hidden_layers=3, outermost_linear=1,
+                     byte_depth=4, grad=1, include_bias=1, include_model=1, **kwargs):
+    """ NOTE::  operations are efficient multiply result * 2 for closer estimate
 
+    estimates max number of samples that a siren model can take in - given a GPU budget
+
+    Args
+        gpu_avail       (int [None]) if None, compute
+        units           (str ["MB"]) | GB
+        in_features [3], out_features [3], hidden_features[1024], hidden_layers[3], outermost_linear[1]:
+            ints, model definition
+        byte_depth      (int [4]) assumes torch.float32
+        grad            (int [1]) on inference grad=0
+        include_bias    (int [1]) compute + bias as separate latent
+        include_model   (bool [1]) | if model already loaded set to False
+
+    Examples
+    >>> grad = 1 # training
+    >>> config = 'x_periment_scripts/eclipse_512_sub.yml'
+    >>> opt = x_utils.read_config(config)
+    >>> samples = x_utils.estimate_samples(x_utils.GPUse().available, grad=grad, **opt.siren)
     """
+    if gpu_avail is None:
+        gpu_avail = GPUse(units=units).available
     scale = {"KB":2**10, "MB":2**20, "GB":2**30}[units]
     _bytes = byte_depth * (1 + grad) / scale
 
-    # remove fixed cost of model
-    l_weights = siren_param_num(in_features, hidden_features, out_features,
-                                hidden_layers) * _bytes
-    gpu_avail -= l_weights
+    if include_model: # remove fixed cost of model
+        l_weights = siren_param_num(in_features, hidden_features, out_features,
+                                    hidden_layers) * _bytes
+        gpu_avail -= l_weights
 
     features = siren_latent_num(in_features, hidden_features, out_features, hidden_layers,
-                                bias_latent, outermost_linear) * _bytes
-
+                                include_bias, outermost_linear) * _bytes
     return int(gpu_avail // features)
 
-def estimate_frames(gpu_avail, frame_size, units="MB", in_features=3, out_features=3, hidden_features=1024, hidden_layers=3,
-                        byte_depth=4, grad=1, bias_latent=1, outermost_linear=1, **kwargs):
-    samples = estimate_samples(gpu_avail=gpu_avail, units=units, in_features=in_features, out_features=out_features,
-                               hidden_features=hidden_features, hidden_layers=hidden_layers,  byte_depth=byte_depth,
-                               grad=grad, bias_latent=bias_latent, outermost_linear=outermost_linear, **kwargs)
-    return samples // np.prod(frame_size)
+def estimate_frames(frame_size, gpu_avail=None, units="MB", in_features=3, out_features=3,
+                    hidden_features=1024, hidden_layers=3, outermost_linear=1,
+                    byte_depth=4, grad=1, include_bias=1, include_model=1, **kwargs):
+    """ NOTE::  operations are efficient multiply result * 2 for closer estimate
+    estimates max number of frames that a siren model can take in - given a GPU budget
+    Args
+        frame_size  (list, tuple)
+    other args from  estimate_samples()
+
+    Examples: how many frame can be loaded in GPU for inference of sie 512,512
+    >>> grad = 0 # inference
+    >>> config = 'x_periment_scripts/eclipse_512_sub.yml'
+    >>> opt = x_utils.read_config(config)
+    >>> gpu_avail = x_utils.GPUse().available
+    >>> frames = x_utils.estimate_frames(frame_size=[512,512], gpu_avail=gpu_avail, grad=grad, **opt.siren)
+
+    # actual number of frames that can be loaded on inference
+    >>>  n = int(x_utils.estimate_frames([512,512], grad=0)//0.5)
+    """
+    samples = estimate_samples(gpu_avail=gpu_avail, units=units, in_features=in_features,
+                               out_features=out_features, hidden_features=hidden_features,
+                               hidden_layers=hidden_layers, outermost_linear=outermost_linear,
+                               byte_depth=byte_depth, grad=grad, include_bias=include_bias,
+                               include_model=include_model, **kwargs)
+    return samples / np.prod(frame_size)

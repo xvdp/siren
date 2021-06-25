@@ -9,11 +9,13 @@ from x_infer import load_state_dict
 
 import torch
 from torch.utils.data import DataLoader
+import pandas as pd # move to x_log
 
 
 import x_utils
 import x_dataio
 import x_modules
+import x_infer
 from x_log import PLog
 
 
@@ -39,8 +41,10 @@ def _continue(folder, init=False, cleanup=False):
     return False
 
 def _prevent_overwrite(folder, model):
-
-    if osp.exists(folder):
+    """  if found, either overwrite or continue last checkpoint
+    """
+    epoch = 0
+    if osp.exists(folder) and [f.name  for f in os.scandir(folder) if (".pth" in f.name or ".csv" in f.name)]:
         val = input("The model directory %s exists. Overwrite? (y/n)"%folder)
         if val == 'y':
             shutil.rmtree(folder)
@@ -53,9 +57,14 @@ def _prevent_overwrite(folder, model):
             if checkpoint is not None:
                 state_dict = torch.load(checkpoint)
                 model.load_state_dict(state_dict)
+                plog = osp.join(folder, "train.csv")
+                if osp.isfile(plog):
+                    df = pd.read_csv(plog)
+                    epoch = int(df.Epoch.iloc[-1])
     os.makedirs(folder, exist_ok=True)
+    return epoch
 
-def train(model, train_dataloader, epochs, lr, epochs_til_checkpoint, model_dir, dataset):
+def train(model, train_dataloader, epochs, lr, epochs_til_checkpoint, model_dir, dataset, **kwargs):
 
     optim = torch.optim.Adam(lr=lr, params=model.parameters())
 
@@ -64,9 +73,9 @@ def train(model, train_dataloader, epochs, lr, epochs_til_checkpoint, model_dir,
     # if use_lbfgs:
     #     optim = torch.optim.LBFGS(lr=lr, params=model.parameters(), max_iter=50000, max_eval=50000,
     #                               history_size=50, line_search_fn='strong_wolfe')
+    max_steps = None if "num_steps" not in kwargs else kwargs["num_steps"]
 
-
-    _prevent_overwrite(model_dir, model)
+    epoch_0 = _prevent_overwrite(model_dir, model)
 
     log = PLog(osp.join(model_dir, "train.csv"))
 
@@ -75,10 +84,10 @@ def train(model, train_dataloader, epochs, lr, epochs_til_checkpoint, model_dir,
     total_time = 0
     start_time = time.time()
 
-    for epoch in range(epochs):
-        if epoch:
-            dataset.shuffle()
-        if not _continue(model_dir):
+    for epoch in range(epoch_0, epochs+epoch_0):
+        # if epoch and shuffle_dataset:
+        #     dataset.shuffle()
+        if not _continue(model_dir) or max_steps is not None and total_steps >= max_steps:
             break
 
         if not epoch % epochs_til_checkpoint and epoch:
@@ -110,9 +119,16 @@ def train(model, train_dataloader, epochs, lr, epochs_til_checkpoint, model_dir,
 
             log.write(Time=_time, Total_Time=total_time)
 
-    torch.save(model.state_dict(), osp.join(model_dir, 'model_final.pth'))
+        if dataset.strategy == 1:
+            dataset.shuffle()
 
+    checkpoint = osp.join(model_dir, 'model_final.pth')
+    torch.save(model.state_dict(), checkpoint)
+    print(f"\nFinished at epoch {epoch}, checkpoint{checkpoint}")
     _continue(model_dir, cleanup=True)
+
+    return checkpoint
+
 
 class LinearDecaySchedule():
     def __init__(self, start_val, final_val, num_steps):
@@ -124,39 +140,42 @@ class LinearDecaySchedule():
         return self.start_val + (self.final_val - self.start_val) * min(iter / self.num_steps, 1.)
 
 
-def train_video(config_file="experiment_scripts/x_eclipse_5122.yml", verbose=1):
+def train_video(config_file="experiment_scripts/x_eclipse_5122.yml", verbose=1, **kwargs):
     """  simple trainer
+    kwargs
+    shuffle_loader=None, shuffle_dataset=None,
     """
     try:
+        ##
+        # read config files
         opt = x_utils.read_config(config_file)
-        if verbose:
-            print(opt)
-        # if opt.train_type = "video"
+        opt.update(**kwargs)
+        if "shuffle" not in opt:
+            opt.shuffle = True
+        if "strategy" not in opt:
+            opt.strategy = 2
+        if verbose: print(opt)
 
-        ####
-        # Memory
-        # CUDA: estimate sample size to maximize cuda utilization
-        # operations are efficient, sample size can be ~2x the estimate
-        # TODO: estimate CPU and add frame range so CPU wont blow up
-
-        # init cuda
+        ##
+        # Estimate GPU Max allowed
+        # 1. init cuda
         z = torch.ones([1]).cuda()
         gpus = x_utils.GPUse()
-        if verbose:
-            print(gpus)
-
-        # if opt.sample_frac is None: # just do it
+        if verbose: print(gpus)
+        # 2. estimate max samples
         max_samples = x_utils.estimate_samples(gpus.available, **opt["siren"])
-        if verbose:
-            print(f"max sample to fit within {gpus.available}MB Cuda: {max_samples}, duplicated to {2*max_samples}")
+        if verbose: print(f"max samples {max_samples}*2 to fit within {gpus.available}MB")
         max_samples *= 2
 
-        # dataset
-        dset = x_dataio.VideoDataset(opt.data_path, sample_size=max_samples, frame_range=opt.frame_range)
-        if verbose:
-            print(f"Creating dataset of {len(dset)}, data loaded size {dset.data.shape} with mgrid of same size")
-        # shuffle false as since shuffle is incorporated into the dataset. TODO simplify
-        dataloader = DataLoader(dset, shuffle=False, batch_size=1, pin_memory=True, num_workers=0)
+        ##
+        # dataset, loader, model
+        dset = x_dataio.VideoDataset(opt.data_path, sample_size=max_samples, frame_range=opt.frame_range, strategy=opt.strategy)
+        if verbose: print(f"Creating dataset of {len(dset)}, data loaded size {dset.data.shape}")
+        dataloader = DataLoader(dset, shuffle=opt.shuffle, batch_size=1, pin_memory=True, num_workers=0)
+        opt.sidelen = tuple(dset.data.shape[:-1])
+        opt.chanels = dset.data.shape[-1]
+        opt.sample_size = dset.sample_size
+        opt.dset_len = len(dset)
 
         # model
         model = x_modules.Siren(**opt["siren"])
@@ -164,15 +183,40 @@ def train_video(config_file="experiment_scripts/x_eclipse_5122.yml", verbose=1):
         # optim = torch.optim.Adam(lr=opt.lr, params=model.parameters())
         # loss_fn = lambda x,y: ((x-y)**2).mean()
 
-        # log
+        ##
+        # logging
         folder = osp.join(opt.logging_root, opt.experiment_name)
+        opt.to_yaml(osp.join(folder, "training_options.yml"))
+        checkpoint = train(model, dataloader, opt.num_epochs, opt.lr, opt.epochs_til_checkpoint, folder, dataset=dset)
 
-        train(model, dataloader, opt.num_epochs, opt.lr, opt.epochs_til_checkpoint, folder, dset)
+        # cleanup
+        sidelen = dset.sidelen.tolist()
+        _cleanup(dset, dataloader)
 
+
+        if "render" in kwargs:
+            # option max_frames, original_path
+            with torch.no_grad():
+                model.eval()
+                chunksize = int(x_utils.estimate_frames(sidelen[-2:], grad=0)//0.5)
+                render = x_utils.EasyDict(model=model, sidelen=sidelen, chunksize=chunksize)
+                if isinstance(kwargs["render"], dict):
+                    render.update(kwargs["render"])
+                if "outname" not in render:
+                    render.outname = osp.join(folder, "infrerence_{:04}.mp4".format(opt.num_epochs))
+
+            x_infer.render_video(**render)
 
     except Exception as _e:
         logging.exception("train_video fails")
 
     finally:
-        torch.cuda.synchronize()
-        torch.cuda.empty_cache()
+        # cleanup
+        _cleanup(dset, dataloader, model)
+
+def _cleanup(*objs):
+    for obj in objs:
+        if obj is not None:
+            del obj
+    torch.cuda.synchronize()
+    torch.cuda.empty_cache()

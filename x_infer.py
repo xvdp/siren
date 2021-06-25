@@ -7,7 +7,7 @@ from PIL import Image
 import cv2
 import torch
 import modules
-from x_dataio import get_mgrid
+from x_dataio import get_mgrid, _aslist
 from x_modules import Siren
 
 
@@ -299,7 +299,7 @@ class SirenRender:
         vidi.ffplay(self.name)
 
 
-def render_video(model, outname, sidelen=[1426,256,256], chunksize=12, simple_siren=True, original_path=None, max_frames=None):
+def render_video(model, outname, sidelen=[1,512,512], chunksize=3, simple_siren=True, original_path=None, max_frames=None):
     """
     Args
         model           (nn.Module, str) siren model or chekckpoint path
@@ -310,6 +310,7 @@ def render_video(model, outname, sidelen=[1426,256,256], chunksize=12, simple_si
         original_path   (str [None]) if video or path to original video, render side by side
         # original_path overrides sidelen
 
+    # [1426,256,256],
     TODO flip around, if not original_path, require sidelen
     if sidelen render only n frames from original path, maybe add skip
     TODO implement better control of sparsity
@@ -320,6 +321,8 @@ def render_video(model, outname, sidelen=[1426,256,256], chunksize=12, simple_si
     else:
         channels = list(model.parameters())[-1].shape[0]
 
+    sidelen = _aslist(sidelen)
+
     frame_size = sidelen[1:]
     if original_path is not None:
         assert osp.exists(original_path), f"original video could not be found in {original_path}"
@@ -327,7 +330,12 @@ def render_video(model, outname, sidelen=[1426,256,256], chunksize=12, simple_si
                              if f.name[-4:].lower() in (".png", ".jpg", ".jpeg")])
         assert len(image_files), f"no images found {original_path}"
 
-        sidelen = [len(image_files), *Image.open(image_files[0]).size]
+        # number of frames requested by sidelen, size frame from image
+        sidelen = [sidelen[0], *(Image.open(image_files[0]).size)]
+        image_files = image_files[:sidelen[0]]
+        sidelen[0] = len(image_files)
+
+        # expand frame size to include both render and image
         frame_size = sidelen[1:]
         frame_size[-1] *= 2
 
