@@ -7,6 +7,7 @@ from PIL import Image
 import cv2
 import torch
 import modules
+from x_log import logger
 from x_dataio import get_mgrid, _aslist
 from x_modules import Siren
 
@@ -148,7 +149,7 @@ class SirenRender:
         frames      int, list, tuple, range
         
     """
-    def __init__(self, model, name, sidelen, **kwargs):
+    def __init__(self, model, name, sidelen, loglevel=20, **kwargs):
 
         self.model = None
         self.channels = None
@@ -162,6 +163,10 @@ class SirenRender:
         self._video = (".mp4", ".mov", ".avi")
         self._image = (".jpg", ".jpeg", ".png")
 
+        self.log = logger("Render", level=loglevel)
+
+        self.fps = 30 if "fps" not in kwargs else kwargs['fps']
+
 
         self.set_output(self.name)
         self._get_model(model)
@@ -173,8 +178,10 @@ class SirenRender:
 
     def _get_model(self, model):
         if isinstance(model, str) and osp.isfile(model):
+            self.log[0].info(f"loading model from checkpoint: {model}")
             self.model, self.channels = model_from_checkpoint(model)
         else:
+            self.log[0].info(f"loading model")
             self.channels = list(self.model.parameters())[-1].shape[0]
 
     def set_output(self, name):
@@ -197,7 +204,7 @@ class SirenRender:
             elif ext in self._video:
                 self._output_type = "video"
             else:
-                logging.warning(f"  Unsupported format {ext} not in {self._video} or {self._image}, dfaulting to 'array' output_type")
+                self.log[0].warning(f"  Unsupported format {ext} not in {self._video} or {self._image}, dfaulting to 'array' output_type")
 
     def add_comp(self, data):
         """ add a comparison frames, resets the size of dimensions
@@ -217,7 +224,7 @@ class SirenRender:
             elif isinstance(data, str) and osp.isdir(data):
                 data = sorted([f.path for f in os.scandir(data) if osp.splitext(f.name)[1] in self._image])
                 if not data:
-                    logging.warning(f"  no images found in {data}, no image was added")
+                    self.log[0].warning(f"  no images found in {data}, no image was added")
                 else:
                     _sh = np.asarray(Image.open(data[0])).shape
                     _grid = [len(data), *_sh[:-1]]
@@ -239,16 +246,16 @@ class SirenRender:
                 if len(self.sidelen) > len(_grid):
                     _grid = [1] + _grid
                 if len(self.sidelen) != len(_grid):
-                    logging.warning(f"  invalid side len in comparision {_grid}, for {self.sidelen}")
+                    self.log[0].warning(f"  invalid side len in comparision {_grid}, for {self.sidelen}")
                     self._comp_type = None
                 if _ch != self.channels:
-                    logging.warning(f"  invalid channels in comparison {_ch}, expected {self.channels}")
+                    self.log[0].warning(f"  invalid channels in comparison {_ch}, expected {self.channels}")
                     self._comp_type = None
 
             if self._comp_type is not None:
                 self.comp = data
                 self.sidelen = _grid
-                logging.info(f"  added comp type{self._comp_type}, size {_grid}")
+                self.log[0].info(f"  added comp type{self._comp_type}, size {_grid}")
 
     def _addframes(self, frames):
         if isinstance(frames, int):
@@ -259,39 +266,61 @@ class SirenRender:
             frames = list(range(self.sidelen[0]))
         return frames
 
-    def render_video(self, frames=None, chunksize=3):
+    def render_video(self, frames=None, chunksize=3, **kwargs):
         # TODO add chunksize estimatio
         # TODO hypernets
 
 
-        frames = self._addframes(frames)
-        frame_size = self.sidelen[1:] if self._comp_type is None else self.sidelen[1:]*2
+        if 'fps' in kwargs:
+            self.fps = kwargs['fps']
 
-        output_size = [chunksize, *self.sidelen[1:], self.channels]
+        coords = None
+        out = None
+        try:
+            frames = self._addframes(frames)
+            frame_size = self.sidelen[1:] if self._comp_type is None else self.sidelen[1:]*2
+            output_size = [chunksize, *self.sidelen[1:], self.channels]
 
-        with vidi.FFcap(self.name, size=frame_size, fps=30) as Vidi:
-            with torch.no_grad():
-                self.model.cuda().eval()
-                while frames:
-                    chunksize = min(chunksize, len(frames))
-                    output_size = [chunksize, *self.sidelen[1:], self.channels]
-                    if frames[chunksize-1] - frames[0] == chunksize - 1: # frames are contiguous
-                        coords = get_mgrid(self.sidelen, [[frames[0], frames[chunksize]]]).cuda()
-                    else:
-                        coords = torch.cat([get_mgrid(self.sidelen, [[frames[i], frames[i+1]]])
-                                            for i in range(chunksize)]).cuda()
+            self.log[0].info("Rendering {}: {},{},{}, chunks: {}".format(self.name, len(frames),
+                                                                        tuple(self.sidelen[1:]),
+                                                                        self.channels, chunksize))
+            self.log[1].terminator = "\r"
+            _i = 0
+            with vidi.FFcap(self.name, size=frame_size, fps=self.fps) as Vidi:
+                with torch.no_grad():
+                    self.model.cuda().eval()
 
-                    for _ in range(chunksize):
-                        frames.pop(0)
+                    while frames:
+                        chunk = frames[:chunksize]
+                        output_size = [len(chunk), *self.sidelen[1:], self.channels]
+                        self.log[0].info(f" {_i}: frames {len(frames)}, chunk {len(chunk)} ")
 
-                    out = self.model(coords)
-                    out = np.clip((out.cpu().detach().numpy() * 0.5 + 0.5), 0, 1.0)
-                    out = (out * 255).astype(np.uint8).reshape(chunksize, *output_size[1:])
+                        if chunk[-1] - chunk[0] == len(chunk) -1: #contiguous
+                            coords = get_mgrid(self.sidelen, [[chunk[0], chunk[-1]+1]]).cuda()
+                        else:
+                            coords = torch.cat([get_mgrid(self.sidelen, [[chunk[i], chunk[i]]])
+                                                for i in range(len(chunk))]).cuda()
 
-                    for i, frame in enumerate(out):
-                        Vidi.add_frame(frame)
-        del coords
-        del out
+                        for _ in range(len(chunk)):
+                            frames.pop(0)
+                            _i += 1
+
+                        out = self.model(coords)
+                        out = np.clip((out.cpu().detach().numpy() * 0.5 + 0.5), 0, 1.0)
+                        out = (out * 255).astype(np.uint8).reshape(*output_size)
+
+                        for i, frame in enumerate(out):
+                            Vidi.add_frame(frame)
+
+        except Exception as e:
+            self.log[0].exception("\nRender video fails")
+
+        # cleanup
+        self.log[1].terminator = "\n"
+        self.log[0].info(f"\n Finished render {self.name}, to play result call: >>> self.play()")
+        for obj in [coords, out]:
+            if obj is not None:
+                del obj
         torch.cuda.synchronize()
         torch.cuda.empty_cache()
 
@@ -299,7 +328,7 @@ class SirenRender:
         vidi.ffplay(self.name)
 
 
-def render_video(model, outname, sidelen=[1,512,512], chunksize=3, simple_siren=True, original_path=None, max_frames=None):
+def render_video(model, outname, sidelen=[1,512,512], chunksize=3, simple_siren=True, original_path=None, max_frames=None, loop=0):
     """
     Args
         model           (nn.Module, str) siren model or chekckpoint path
@@ -387,7 +416,7 @@ def render_video(model, outname, sidelen=[1,512,512], chunksize=3, simple_siren=
 
     print("\nSaved to {} total time, {}s, time/frame {}s".format(outname, round(_time), round(_time/sidelen[0], 3)))
 
-    vidi.ffplay(outname)
+    vidi.ffplay(outname, loop=loop)
 
 # def test_vid(max_frames=None):
 #     #from x_infer import render_siren_video

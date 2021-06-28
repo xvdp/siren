@@ -1,0 +1,36 @@
+
+# Run from siren  # todo render and compare /media/z/Malatesta/zXb/share/siren/cat_video/checkpoints
+# >>> x_training.train_video_from_config(config_file)
+logging_root:            /media/z/Malatesta/zXb/share/siren
+strategy:               -1  # original single iter per batch
+experiment_name:        cat_s-1_100k
+data_path:              ./data/cat_video.mp4
+train_type:             video
+batch_size:                   1
+lr:                      0.0001
+num_epochs:              100000
+num_steps:               100000
+epochs_til_checkpoint:    10000
+steps_til_summary:            1
+model_type:                sine
+sample_frac:               null # 0.0038 if none, autocomute
+checkpoint_path:           null
+frame_range:               null # (0, 4) | (45) | (5,20,2)
+shuffle:                   1
+verbose:                   1
+# model parameters
+siren:
+  in_features:
+    3
+  out_features:
+    3
+  hidden_features:
+    1024
+  hidden_layers:
+    3
+  outermost_linear:
+    true
+  first_omega_0:
+    30
+  hidden_omega_0:
+    30.

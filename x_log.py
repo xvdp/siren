@@ -12,6 +12,10 @@ import numpy as np
 import pandas as pd
 import matplotlib.pyplot as plt
 
+
+safelog10 = lambda x: 0.0 if not x else np.log10(np.abs(x))
+sround = lambda x, d=1: np.round(x, max((-np.floor(safelog10(x)).astype(int) + d), 0))
+""" sround(x, d=1), smart round to largest digit + d; e.g. sround(0.0212343, 2): 0.0212"""
 ##
 # logging based loggers
 #
@@ -160,8 +164,11 @@ class PLog:
         if not self.len%self._log_interval:
             if self.len == 1:
                 print("\t".join(list(self.values.keys())))
-            print("\t".join([str(l[0]).replace("nan", "") for l in self.values.values()]),
-                  **self._end)
+            msg = [str(l[0]).replace("nan", "") for l in self.values.values()]
+            for i in range(len(msg)):
+                if isinstance(msg[i], (float, np.float32, np.float64)):
+                    msg[i] = sround(msg[i])
+            print("\t".join(msg), **self._end)
 
 def plotlog(logname, column="Loss", figsize=(10,5), title=None, label=None, show=True):
     """ plots column [Loss] from csv file
@@ -189,7 +196,7 @@ def plotlog(logname, column="Loss", figsize=(10,5), title=None, label=None, show
         kwargs["label"] = label
     else:
         kwargs["label"] = column
-    kwargs["label"] += f" {np.round(y.min(), 4)}"
+    kwargs["label"] += f" {sround(y.min(), 1)}"
     kwargs["markevery"] = [np.argmin(y)]
     kwargs["marker"] = 'v'
     plt.plot(y, **kwargs)

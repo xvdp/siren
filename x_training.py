@@ -11,6 +11,7 @@ import torch
 from torch.utils.data import DataLoader
 import pandas as pd # move to x_log
 
+import vidi
 
 import x_utils
 import x_dataio
@@ -73,7 +74,7 @@ def train(model, train_dataloader, epochs, lr, epochs_til_checkpoint, model_dir,
     # if use_lbfgs:
     #     optim = torch.optim.LBFGS(lr=lr, params=model.parameters(), max_iter=50000, max_eval=50000,
     #                               history_size=50, line_search_fn='strong_wolfe')
-    max_steps = None if "num_steps" not in kwargs else kwargs["num_steps"]
+    num_steps = None if "num_steps" not in kwargs else kwargs["num_steps"]
 
     epoch_0 = _prevent_overwrite(model_dir, model)
 
@@ -87,14 +88,15 @@ def train(model, train_dataloader, epochs, lr, epochs_til_checkpoint, model_dir,
     for epoch in range(epoch_0, epochs+epoch_0):
         # if epoch and shuffle_dataset:
         #     dataset.shuffle()
-        if not _continue(model_dir) or max_steps is not None and total_steps >= max_steps:
+
+        if not _continue(model_dir) or (num_steps is not None and total_steps >= num_steps):
             break
 
         if not epoch % epochs_til_checkpoint and epoch:
             torch.save(model.state_dict(), osp.join(model_dir, 'model_epoch_%04d.pth' % epoch))
 
         for step, (model_input, gt) in enumerate(train_dataloader):
-            log.collect(**{"Epoch":epoch, "Step":step})
+            log.collect(**{"Epoch":epoch, "Iter":step, "IterAll":total_steps})
 
             pos = model_input["coords"].cuda()
             target = gt["img"].cuda()
@@ -120,6 +122,7 @@ def train(model, train_dataloader, epochs, lr, epochs_til_checkpoint, model_dir,
             log.write(Time=_time, Total_Time=total_time)
 
         if dataset.strategy == 1:
+            print(f"\nEnd of epoch {epoch}, iters {total_steps}: shuffle dataset")
             dataset.shuffle()
 
     checkpoint = osp.join(model_dir, 'model_final.pth')
@@ -169,6 +172,10 @@ def train_video(config_file="experiment_scripts/x_eclipse_5122.yml", verbose=1, 
 
         ##
         # dataset, loader, model
+        if osp.splitext(opt.data_path)[1].lower() in (".mp4", ".avi", ".mov"):
+            # print("datapath", opt.data_path
+            opt.fps = vidi.ffprobe(opt.data_path)["avg_frame_rate"]
+
         dset = x_dataio.VideoDataset(opt.data_path, sample_size=max_samples, frame_range=opt.frame_range, strategy=opt.strategy)
         if verbose: print(f"Creating dataset of {len(dset)}, data loaded size {dset.data.shape}")
         dataloader = DataLoader(dset, shuffle=opt.shuffle, batch_size=1, pin_memory=True, num_workers=0)
@@ -176,6 +183,8 @@ def train_video(config_file="experiment_scripts/x_eclipse_5122.yml", verbose=1, 
         opt.chanels = dset.data.shape[-1]
         opt.sample_size = dset.sample_size
         opt.dset_len = len(dset)
+        if "num_steps" not in opt:
+            opt.num_steps = None
 
         # model
         model = x_modules.Siren(**opt["siren"])
@@ -187,7 +196,7 @@ def train_video(config_file="experiment_scripts/x_eclipse_5122.yml", verbose=1, 
         # logging
         folder = osp.join(opt.logging_root, opt.experiment_name)
         opt.to_yaml(osp.join(folder, "training_options.yml"))
-        checkpoint = train(model, dataloader, opt.num_epochs, opt.lr, opt.epochs_til_checkpoint, folder, dataset=dset)
+        checkpoint = train(model, dataloader, opt.num_epochs, opt.lr, opt.epochs_til_checkpoint, folder, dataset=dset, num_steps=opt.num_steps)
 
         # cleanup
         sidelen = dset.sidelen.tolist()
@@ -204,8 +213,13 @@ def train_video(config_file="experiment_scripts/x_eclipse_5122.yml", verbose=1, 
                     render.update(kwargs["render"])
                 if "outname" not in render:
                     render.outname = osp.join(folder, "infrerence_{:04}.mp4".format(opt.num_epochs))
+                render.fps = opt.fps
 
-            x_infer.render_video(**render)
+                S = x_infer.SirenRender(**render)
+                S.render_video()
+
+
+            # x_infer.render_video(**render)
 
     except Exception as _e:
         logging.exception("train_video fails")

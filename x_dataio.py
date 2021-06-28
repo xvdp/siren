@@ -30,7 +30,8 @@ import os
 import os.path as osp
 import numpy as np
 from PIL import Image
-from numpy.random import sample
+# import skvideo.io
+import vidi
 import torch
 from torch.utils.data import Dataset
 from x_log import logger
@@ -275,135 +276,6 @@ def sparse_image_list(folder, frame_range=None, extensions=(".png", ".jpg", ".jp
     return subset
 
 
-class VideoDataset_(Dataset):
-    """ VideoDataset
-    # modified video dataset: __len__ return 1 in original meant only 1 random vector of
-    # Nsamples was returned per epcoch
-
-
-    CPU intilization, videos too large will swap.
-    TODO test sequential, test image chunks,
-    TODO use pseudorandom non repeating properties.
-
-    load:
-    # CPU RAM is 3x the size of the video in float32 mean centered - in this version
-    # 1x video frames
-    # ~1x mgrid
-    # 1x shuffled indices
-
-    index shuffling shouldnot utilize massive amount of ram.
-
-
-    Video Datastet, .npy, mp4, image folder
-        frame_range = only a few frames.
-    Args
-        data_path           (str) folder of images - req. images must be same size  TODO reenable mp4
-        frame_range         (int, tuple, list, range, [None])
-        sample_fraction     (float [1]) fractional loader
-
-
-
-    Example:
-        config = 'x_periment_scripts/eclipse_512_sub.yml'
-        opt = x_utils.read_config(config)
-        opt.sample_size = x_utils.estimate_samples(x_utils.GPUse().available, grad=1, **opt.siren)*2
-        opt.shuffle=False
-        kw = {k:opt[k] for k  in opt if k in list(inspect.signature(VideoDataset.__init__).parameters)[1:]}
-    """
-    def __init__(self, data_path, frame_range=None,
-                 sample_fraction=1., sample_size=None,   # sample_size overrides sample_fraction
-                 strategy=1,     # randint original, 1 2
-                 shuffle=True,
-                 loglevel=20, device="cpu"):
-        """
-        Args
-            sample_fraction     float(1.)   sample_size = data size * sample_fraction
-            sample_size         int [None]  overrides sample fraction number of samples load
-
-            strategy     int [1] 0: returns random samples, which may be repeating
-                                        1: returns complete set of non repeating samples
-                                        2: returns number frames
-                                        3: returns random sized sparse contiguous data cubes  - TODO implement full coverage sampler
-
-            shuffle             bool [True] | if False returns sequential samples
-
-        """
-        super().__init__()
-        log = logger("VideoDataset", level=loglevel)
-        self.data = None
-        self._datashape = None
-        self.mgrid = None
-
-        self.sample_size = sample_size # naming change N_samples, overrides sample_fraction
-        self.sample_fraction = sample_fraction
-        self.sampler = None # only defined in strategy > 0
-        self.strategy = strategy
-
-        # TODO reimplement
-        # if 'npy' in data_path:
-        #     self.vid = np.load(data_path)
-        # elif 'mp4' in data_path:
-        #     self.vid = skvideo.io.vread(data_path).astype(np.single) / 255.
-
-        if osp.isdir(data_path):
-            open_tensor = lambda x, device="cuda": torch.as_tensor((np.asarray(Image.open(x), dtype=np.float32) - 127.5)/127.5, device=device)
-            images = sparse_image_list(data_path, frame_range)
-            self.data = torch.stack([open_tensor(image, device) for image in images], dim=0)
-            self._datashape = self.data.shape
-            self.data = self.data.view(-1, self.data.shape[-1])
-            self.channels = self.data.shape[-1]
-            log[0].info(f"Loaded data, {self._datashape}, reshaped {tuple(self.data.shape)}")
-
-        else:
-            raise NotImplementedError("mp4, mov not yet re implemented")
-
-        ## index positions
-        log[0].info(f" getting mgrid with sidelen {list(self._datashape[:-1])}")
-        self.mgrid = get_mgrid(list(self._datashape[:-1]))
-
-        if sample_size is not None:
-            self.sample_fraction = min(1, sample_size / self._datashape[0])
-        else:
-            self.sample_size = max(1, int(self.sample_fraction *  self._datashape[0]))
-
-        log[0].info("   num samples, {}, fraction, {}, grid {}".format(self.sample_size,
-                    self.sample_fraction, tuple(self.mgrid.shape)))
-
-        if self.strategy == 1:
-            if shuffle:
-                self.sampler = torch.randperm(self._datashape[0])
-            else:
-                self.sampler = torch.arange(self._datashape[0])
-
-    def shuffle(self):
-        if self.sampler is not None:
-            self.sampler = torch.randperm(self._datashape[0])
-
-    def __len__(self):
-        # if self.strategy == 0:
-        #     return 1
-        return int(1/self.sample_fraction)
-
-    def __getitem__(self, idx):
-        """
-        """
-        if self.sample_fraction < 1.:
-            if self.strategy == 0:
-                coord_idx = torch.randint(0, self.data.shape[0], (self.sample_size,))
-            elif self.strategy == 1:
-                coord_idx = self.sampler[idx: idx+self.sample_size]
-
-            data = self.data[coord_idx, :]
-            coords = self.mgrid[coord_idx, :]
-        else:
-            coords = self.mgrid
-            data = self.data
-
-        in_dict = {'idx': idx, 'coords': coords}
-        gt_dict = {'img': data}
-
-        return in_dict, gt_dict
-
 class VideoDataset(Dataset):
     """ VideoDataset with variations on loading grid.
 
@@ -428,11 +300,11 @@ class VideoDataset(Dataset):
             sample_fraction     float(1.)   sample_size = data size * sample_fraction
             sample_size         int [None]  overrides sample fraction number of samples load
 
-            strategy            int [1] 0: returns random samples, which may be repeating
-                                        1: returns complete set of non repeating samples
-                                        2: returns complete random set of sparse grids
-                                            and complete contiguous set of mini grids: max sparse, min sparse
-                                        3: TODO: frame at a time
+            strategy     int [1]    -1: fully random samples, single iter per epoch
+                                    0: fully random samples, all samples for the data, per per epoch
+                                    1: shuffled random samples, all a samples for tehd ata
+                                    2: complete sparsest sets, and dense set blocks, all samples 2x per epoch
+                                    # 2 is no good, random wwrks better, 0,1,-1
         """
         super().__init__()
         log = logger("VideoDataset", level=loglevel)
@@ -448,25 +320,29 @@ class VideoDataset(Dataset):
         self.strides = None         # defined in strategy: 2
         self.strategy = strategy
 
-        # TODO reimplement
-        # if 'npy' in data_path:
-        #     self.vid = np.load(data_path)
-        # elif 'mp4' in data_path:
-        #     self.vid = skvideo.io.vread(data_path).astype(np.single) / 255.
 
-        if osp.isdir(data_path):
-            open_tensor = lambda x, device="cuda": torch.as_tensor((np.asarray(Image.open(x), dtype=np.float32) - 127.5)/127.5, device=device)
+        as_centered_tensor = lambda x, device="cpu": torch.as_tensor((np.asarray(x, dtype=np.float32) - 127.5)/127.5, device=device)
+
+        if 'npy' in data_path:
+            self.data = torch.as_tensor(np.load(data_path), device=device)
+        elif 'mp4' in data_path:
+            # self.data = as_centered_tensor(skvideo.io.vread(data_path), device=device)
+            self.data = as_centered_tensor(vidi.ffread(data_path), device=device)
+
+        elif osp.isdir(data_path):
+            # open_tensor = lambda x, device="cuda": torch.as_tensor((np.asarray(Image.open(x), dtype=np.float32) - 127.5)/127.5, device=device)
             images = sparse_image_list(data_path, frame_range)
-            self.data = torch.stack([open_tensor(image, device) for image in images], dim=0)
-            # self._datashape = self.data.shape
-            self.sidelen = torch.as_tensor(self.data.shape[:-1])
-            self.channels = self.data.shape[-1]
+            self.data = torch.stack([as_centered_tensor(Image.open(image), device=device) for image in images], dim=0)
 
-            self.data = self.data.view(-1, self.data.shape[-1])
-            log[0].info(f"Loaded data, sidelen: {self.sidelen.tolist()}, channels {self.channels}")
-            log[0].info(f"         => reshaped to: {tuple(self.data.shape)}")
         else:
             raise NotImplementedError("mp4, mov not yet re implemented")
+
+        self.sidelen = torch.as_tensor(self.data.shape[:-1])
+        self.channels = self.data.shape[-1]
+        self.data = self.data.view(-1, self.data.shape[-1])
+        log[0].info(f"Loaded data, sidelen: {self.sidelen.tolist()}, channels {self.channels}")
+        log[0].info(f"         => reshaped to: {tuple(self.data.shape)}")
+
 
 
         if sample_size is not None:
@@ -494,9 +370,12 @@ class VideoDataset(Dataset):
             log[0].info(f"    strides: {self.strides.tolist()}, max mgrid block: {self.grid_indices[-1].tolist()}")
             log[0].info(f"    -> sample size: {self.sample_size}")
 
+
         elif self.strategy == 1:
             self.sampler = torch.randperm(self.sidelen.prod())
             log[0].info(f" strategy: {self.strategy}, randperm iters: {int(1/self.sample_fraction)}")
+
+        # original, 1 iter per epoch
         elif self.strategy == -1:
             log[0].info(f" strategy: {self.strategy}, single sample per epoch")
 
@@ -507,12 +386,10 @@ class VideoDataset(Dataset):
             self.sampler = torch.randperm(self.sidelen.prod())
 
     def __len__(self):
-    
         if self.strategy == -1:
             return 1 # original strategy outputs single sample per
         elif self.strategy == 2:
             return len(self.grid_offset) * 2
-
         return int(1/self.sample_fraction)
 
     def __getitem__(self, idx):
@@ -520,23 +397,24 @@ class VideoDataset(Dataset):
         """
         with torch.no_grad():
             if self.sample_fraction < 1.:
-                if self.strategy == 2: # non repeating sample grid
+                # non repeating sample grid/ sparsest and densest blocks
+                if self.strategy == 2:
                     if idx < len(self.grid_offset): # sparsest
                         coords = self.grid_indices * self.strides + self.grid_offset[idx]
                     else: # inflate contiguous minigrids to offset idx
                         coords = self.grid_offset.max(dim=0).values * self.grid_offset[idx%len(self.grid_offset)] + self.grid_indices
                     data = self.data[flatten_igrid(coords, self.sidelen)].view(-1, self.channels)
                     coords = 2*coords/(self.sidelen-1) - 1
-                else:  # original: possibly repeating random samples
+                else:
+                    # possibly repeating
                     if self.strategy < 1:
                         coords = torch.randint(0, self.data.shape[0], (self.sample_size,))
-
-                    elif self.strategy == 1: # non repeating random samples
+                    # non repeating shuffled samples
+                    elif self.strategy == 1:
                         coords = self.sampler[idx: idx+self.sample_size]
 
                     data = self.data[coords, :]
                     coords = 2*expand_igrid(coords, self.sidelen)/(self.sidelen-1) - 1
-                    # coords = get_subgrid(coord_idx, self.sidelen)
             else:
                 coords = self.mgrid
                 data = self.data
@@ -545,7 +423,6 @@ class VideoDataset(Dataset):
         gt_dict = {'img': data}
 
         return in_dict, gt_dict
-
 
 ###
 
