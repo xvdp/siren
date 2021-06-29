@@ -85,7 +85,7 @@ def _prevent_overwrite(folder, model):
     os.makedirs(folder, exist_ok=True)
     return epoch, total_time
 
-def train(model, train_dataloader, epochs, lr, epochs_til_checkpoint, model_dir, dataset, terminator="\r", **kwargs):
+def train(model, train_dataloader, epochs, lr, epochs_til_checkpoint, model_dir, dataset, steps_til_summary=1, terminator="\r", **kwargs):
 
     optim = torch.optim.Adam(lr=lr, params=model.parameters())
 
@@ -139,7 +139,7 @@ def train(model, train_dataloader, epochs, lr, epochs_til_checkpoint, model_dir,
             _time = round(total_time/total_steps, 2)
             total_time = int(total_time)
 
-            log.write(Time=_time, Total_Time=total_time)
+            log.write(Time=_time, printlog=not(total_steps%steps_til_summary), Total_Time=total_time)
 
         if dataset.strategy == 1:
             print(f"\nEnd of epoch {epoch}, iters {total_steps}: shuffle dataset")

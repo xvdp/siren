@@ -147,7 +147,7 @@ class PLog:
                 _lens.append(_len)
         assert len(_lens) == 1, f"multiple column lengths found, {_lens}"
 
-    def write(self, new_frame=False, **values):
+    def write(self, new_frame=False, printlog=True, **values):
         """collect key values to make dataframe
         """
         # build dict
@@ -168,7 +168,8 @@ class PLog:
                 print("\t".join(list(self.values.keys())))
 
             msg = [str(l[0]).replace("nan", "") for l in self.values.values()]
-            print("\t".join(msg), **self._end)
+            if printlog:
+                print("\t".join(msg), **self._end)
 
 def plotlog(logname, column="Loss", figsize=(10,5), title=None, label=None, show=True):
     """ plots column [Loss] from csv file
