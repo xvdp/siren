@@ -154,10 +154,18 @@ class PLog:
         self.collect(new_frame=new_frame, **values)
         self._fix_columns()
 
+        #assert check file has been created
+        _check_creation = not osp.isfile(self.name)
+    
         # write to csv
         dfl = pd.DataFrame(self.frame)
         dfl.to_csv(self.name, index=False, mode='a',
                    header=not osp.isfile(self.name))
+
+        if _check_creation:
+            assert osp.isfile(self.name), f"could not write file: {self.name}"
+            print("logging file created:", self.name)
+
         # cleanup
         self.len += 1
         self.values = {**self.frame}

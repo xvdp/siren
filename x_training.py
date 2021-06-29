@@ -85,7 +85,7 @@ def _prevent_overwrite(folder, model):
     os.makedirs(folder, exist_ok=True)
     return epoch, total_time
 
-def train(model, train_dataloader, epochs, lr, epochs_til_checkpoint, model_dir, dataset, steps_til_summary=1, terminator="\r", **kwargs):
+def train(model, train_dataloader, epochs, lr, epochs_til_checkpoint, model_dir, dataset, steps_til_summary=1, terminator={"\r"}, **kwargs):
 
     optim = torch.optim.Adam(lr=lr, params=model.parameters())
 
