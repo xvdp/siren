@@ -279,11 +279,6 @@ def sparse_image_list(folder, frame_range=None, extensions=(".png", ".jpg", ".jp
 class VideoDataset(Dataset):
     """ VideoDataset with variations on loading grid.
 
-    Data is loaded all at once | TODO load in manageable chunks,
-    Coordinates are returned on demand given a strategy:
-    loads the entire dataset at once, but does not double the ram,
-    coordinates are returned on demand, depending on strategy
-
     Example:
         config = 'x_periment_scripts/eclipse_512_sub.yml'
         opt = x_utils.read_config(config)
@@ -292,15 +287,15 @@ class VideoDataset(Dataset):
         kw = {k:opt[k] for k  in opt if k in list(inspect.signature(VideoDataset.__init__).parameters)[1:]}
     """
     def __init__(self, data_path, frame_range=None,
-                 sample_fraction=1., sample_size=None,   # sample_size overrides sample_fraction
-                 strategy=2,     # randint original, 1 2
-                 loglevel=20, device="cpu"):
+                 sample_fraction=1., sample_size=None,
+                 strategy=-1, loglevel=20, device="cpu"):
         """
         Args
             sample_fraction     float(1.)   sample_size = data size * sample_fraction
             sample_size         int [None]  overrides sample fraction number of samples load
 
-            strategy     int [1]    -1: fully random samples, single iter per epoch
+            # loading strategy in original dataset works best: single data array per epoch.
+            strategy     int [-1]    -1: fully random samples, single iter per epoch
                                     0: fully random samples, all samples for the data, per per epoch
                                     1: shuffled random samples, all a samples for tehd ata
                                     2: complete sparsest sets, and dense set blocks, all samples 2x per epoch
@@ -319,7 +314,6 @@ class VideoDataset(Dataset):
         self.grid_offset = None     # defined in strategy: 2
         self.strides = None         # defined in strategy: 2
         self.strategy = strategy
-
 
         as_centered_tensor = lambda x, device="cpu": torch.as_tensor((np.asarray(x, dtype=np.float32) - 127.5)/127.5, device=device)
 
@@ -392,9 +386,7 @@ class VideoDataset(Dataset):
             return len(self.grid_offset) * 2
         return int(1/self.sample_fraction)
 
-    def __getitem__(self, idx):
-        """
-        """
+    def _item(self, idx):
         with torch.no_grad():
             if self.sample_fraction < 1.:
                 # non repeating sample grid/ sparsest and densest blocks
@@ -418,12 +410,31 @@ class VideoDataset(Dataset):
             else:
                 coords = self.mgrid
                 data = self.data
+        return coords, data
 
+    def __getitem__(self, idx):
+        """
+        """
+        coords, data = self._item(idx)
         in_dict = {'idx': idx, 'coords': coords}
         gt_dict = {'img': data}
 
         return in_dict, gt_dict
 
+
+class VideoDataset2(VideoDataset):
+    """ VideoDataset returning (input,target) pairs
+    """
+    def __init__(self, data_path, frame_range=None,
+                 sample_fraction=1., sample_size=None,
+                 strategy=-1, loglevel=20, device="cpu"):
+        super().__init__(data_path, frame_range, sample_fraction,
+                         sample_size, strategy, loglevel, device)
+
+    def __getitem__(self, idx):
+        """
+        """
+        return self._item(idx)
 ###
 
 # def get_subgrid_pos(pos, sidelen, dtype=torch.float32, device="cpu"):

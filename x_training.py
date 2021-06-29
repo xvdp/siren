@@ -17,7 +17,7 @@ import x_utils
 import x_dataio
 import x_modules
 import x_infer
-from x_log import PLog
+from x_log import PLog, sround
 
 
 # remove tensorflue
@@ -41,29 +41,49 @@ def _continue(folder, init=False, cleanup=False):
             return _cont
     return False
 
+def load_last_checkpoint(folder, model):
+    """ load last chechpoint
+    """
+    checkpoint = osp.join(folder, "model_final.pth")
+    if not osp.isfile(checkpoint):
+        checks = sorted([f.path for f in os.scandir(folder) if ".pth" in f.name])
+        checkpoint = checks[-1] if checks else None
+
+    if checkpoint is not None:
+        state_dict = torch.load(checkpoint)
+        model.load_state_dict(state_dict)
+        return checkpoint
+    return None
+
 def _prevent_overwrite(folder, model):
     """  if found, either overwrite or continue last checkpoint
     """
     epoch = 0
+    total_time = 0
     if osp.exists(folder) and [f.name  for f in os.scandir(folder) if (".pth" in f.name or ".csv" in f.name)]:
         val = input("The model directory %s exists. Overwrite? (y/n)"%folder)
         if val == 'y':
             shutil.rmtree(folder)
-        else:
-            checkpoint = osp.join(folder, "model_final.pth")
-            if not osp.isfile(checkpoint):
-                checks = sorted([f.path for f in os.scandir(folder) if ".pth" in f.name])
-                checkpoint = checks[-1] if checks else None
+        elif load_last_checkpoint(folder, model) is not None:
 
-            if checkpoint is not None:
-                state_dict = torch.load(checkpoint)
-                model.load_state_dict(state_dict)
-                plog = osp.join(folder, "train.csv")
-                if osp.isfile(plog):
-                    df = pd.read_csv(plog)
+            # checkpoint = osp.join(folder, "model_final.pth")
+            # if not osp.isfile(checkpoint):
+            #     checks = sorted([f.path for f in os.scandir(folder) if ".pth" in f.name])
+            #     checkpoint = checks[-1] if checks else None
+
+            # if checkpoint is not None:
+            #     state_dict = torch.load(checkpoint)
+            #     model.load_state_dict(state_dict)
+
+            plog = osp.join(folder, "train.csv")
+            if osp.isfile(plog):
+                df = pd.read_csv(plog)
+                if "Epoch" in df:
                     epoch = int(df.Epoch.iloc[-1])
+                if "Total_Time" in df:
+                    total_time = df.Total_Time.iloc[-1]
     os.makedirs(folder, exist_ok=True)
-    return epoch
+    return epoch, total_time
 
 def train(model, train_dataloader, epochs, lr, epochs_til_checkpoint, model_dir, dataset, **kwargs):
 
@@ -76,7 +96,7 @@ def train(model, train_dataloader, epochs, lr, epochs_til_checkpoint, model_dir,
     #                               history_size=50, line_search_fn='strong_wolfe')
     num_steps = None if "num_steps" not in kwargs else kwargs["num_steps"]
 
-    epoch_0 = _prevent_overwrite(model_dir, model)
+    epoch_0, _extra_time = _prevent_overwrite(model_dir, model)
 
     log = PLog(osp.join(model_dir, "train.csv"))
 
@@ -107,7 +127,7 @@ def train(model, train_dataloader, epochs, lr, epochs_til_checkpoint, model_dir,
             pred = model(pos)
             loss = ((target -pred)**2).mean()
 
-            log.collect(**{"Loss":loss.cpu().item()})
+            log.collect(**{"Loss":sround(loss.cpu().item(), 2)})
 
             optim.zero_grad()
             loss.backward()
@@ -115,9 +135,9 @@ def train(model, train_dataloader, epochs, lr, epochs_til_checkpoint, model_dir,
 
             total_steps += 1
 
-            total_time = time.time() - start_time
+            total_time = time.time() - start_time + _extra_time
             _time = round(total_time/total_steps, 2)
-            total_time = round(total_time, 1)
+            total_time = int(total_time)
 
             log.write(Time=_time, Total_Time=total_time)
 
@@ -211,13 +231,12 @@ def train_video(config_file="experiment_scripts/x_eclipse_5122.yml", verbose=1, 
                 render = x_utils.EasyDict(model=model, sidelen=sidelen, chunksize=chunksize)
                 if isinstance(kwargs["render"], dict):
                     render.update(kwargs["render"])
-                if "outname" not in render:
-                    render.outname = osp.join(folder, "infrerence_{:04}.mp4".format(opt.num_epochs))
+                if "name" not in render:
+                    render.name = osp.join(folder, "infrerence_{:04}.mp4".format(opt.num_epochs))
                 render.fps = opt.fps
 
                 S = x_infer.SirenRender(**render)
                 S.render_video()
-
 
             # x_infer.render_video(**render)
 

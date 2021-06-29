@@ -5,10 +5,12 @@ simple loggers
 * plot train logger
 """
 import sys
+import datetime
 import os
 import os.path as osp
 import logging
 import numpy as np
+import yaml
 import pandas as pd
 import matplotlib.pyplot as plt
 
@@ -164,10 +166,8 @@ class PLog:
         if not self.len%self._log_interval:
             if self.len == 1:
                 print("\t".join(list(self.values.keys())))
+
             msg = [str(l[0]).replace("nan", "") for l in self.values.values()]
-            for i in range(len(msg)):
-                if isinstance(msg[i], (float, np.float32, np.float64)):
-                    msg[i] = sround(msg[i])
             print("\t".join(msg), **self._end)
 
 def plotlog(logname, column="Loss", figsize=(10,5), title=None, label=None, show=True):
@@ -184,6 +184,7 @@ def plotlog(logname, column="Loss", figsize=(10,5), title=None, label=None, show
 
     df = pd.read_csv(logname)
     assert column in df, f"column {column} not found in {list(df.columns)}"
+
 
     if figsize is not None:
         plt.figure(figsize=figsize)
@@ -203,7 +204,18 @@ def plotlog(logname, column="Loss", figsize=(10,5), title=None, label=None, show
 
     _info = f"Iters {len(df)}"
     if "Total_Time" in df:
-        _info += f"\nTime {df.Total_Time.iloc[-1]}s"
+        _info += f"\nTime {str(datetime.timedelta(seconds=int(df.Total_Time.iloc[-1])))}"
+
+    folder = osp.split(logname)[0]
+    ymls = [f.path for f in os.scandir(folder) if f.name.endswith(".yml")]
+    if ymls:
+        with open(ymls[0], "r") as _fi:
+            _meta = yaml.load(_fi, yaml.FullLoader)
+            for k in ['lr', 'strategy']:
+                if k in _meta:
+                    _info += f"\n{k}: {_meta[k]}"
+            if "data_path" in _meta:
+                _info += f"\n{osp.basename(_meta['data_path'])}"
 
     plt.scatter(0,0, s=1, label=_info)
 
@@ -211,9 +223,10 @@ def plotlog(logname, column="Loss", figsize=(10,5), title=None, label=None, show
         epochs = np.unique(df.Epoch)
         if len(epochs) > _maxtick:
             epochs = epochs[ np.linspace(0, epochs[-1], _maxtick).astype(np.int64)]
-    
+
         xlabels = [df.index[df.Epoch == e].values[0] for e in epochs]
-        plt.xticks(xlabels, epochs+1)
+        rotation = 0 if len(str(xlabels[-1])) < 3 else 45
+        plt.xticks(xlabels, epochs+1, rotation=rotation)
         plt.xlabel("Epochs")
 
     plt.grid()
