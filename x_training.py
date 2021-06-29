@@ -85,7 +85,7 @@ def _prevent_overwrite(folder, model):
     os.makedirs(folder, exist_ok=True)
     return epoch, total_time
 
-def train(model, train_dataloader, epochs, lr, epochs_til_checkpoint, model_dir, dataset, **kwargs):
+def train(model, train_dataloader, epochs, lr, epochs_til_checkpoint, model_dir, dataset, terminator="\r", **kwargs):
 
     optim = torch.optim.Adam(lr=lr, params=model.parameters())
 
@@ -98,7 +98,7 @@ def train(model, train_dataloader, epochs, lr, epochs_til_checkpoint, model_dir,
 
     epoch_0, _extra_time = _prevent_overwrite(model_dir, model)
 
-    log = PLog(osp.join(model_dir, "train.csv"))
+    log = PLog(osp.join(model_dir, "train.csv"), end=terminator)
 
     _continue(model_dir, init=True)
     total_steps = 0

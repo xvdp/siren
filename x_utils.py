@@ -286,7 +286,7 @@ class EasyDict(dict):
 
     def __delattr__(self, name: str) -> None:
         del self[name]
-    
+
     def to_yaml(self, name):
         """ save to yaml"""
         os.makedirs(osp.split(name)[0], exist_ok=True)
