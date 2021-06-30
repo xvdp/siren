@@ -179,7 +179,7 @@ class PLog:
             if printlog:
                 print("\t".join(msg), **self._end)
 
-def plotlog(logname, column="Loss", figsize=(10,5), title=None, label=None, show=True):
+def plotlog(logname, column="Loss", figsize=(10,5), title=None, label=None, show=True, fro=0, to=None):
     """ plots column [Loss] from csv file
     if column 'Epoch' exists, ticks them
     Args
@@ -200,13 +200,15 @@ def plotlog(logname, column="Loss", figsize=(10,5), title=None, label=None, show
     if title is not None:
         plt.title(title)
     y = np.asarray(df[column])
+    if fro > 0 or to is not None:
+        y = y[fro:to]
 
     kwargs = {}
     if label is not None:
         kwargs["label"] = label
     else:
         kwargs["label"] = column
-    kwargs["label"] += f" {sround(y.min(), 1)}"
+    kwargs["label"] += f" {sround(y.min(), 2)}"
     kwargs["markevery"] = [np.argmin(y)]
     kwargs["marker"] = 'v'
     plt.plot(y, **kwargs)
@@ -229,13 +231,18 @@ def plotlog(logname, column="Loss", figsize=(10,5), title=None, label=None, show
     plt.scatter(0,0, s=1, label=_info)
 
     if "Epoch" in df:
-        epochs = np.unique(df.Epoch)
+        _epoch = df.Epoch
+        if fro > 0 or to is not None:
+            _epoch = _epoch.iloc[fro:to]
+
+        epochs = np.unique(_epoch)
+        print(epochs[0], epochs[-1])
         if len(epochs) > _maxtick:
-            epochs = epochs[ np.linspace(0, epochs[-1], _maxtick).astype(np.int64)]
+            epochs = epochs[ np.linspace(0, epochs[-1]-epochs[0], _maxtick).astype(np.int64)]
 
         xlabels = [df.index[df.Epoch == e].values[0] for e in epochs]
         rotation = 0 if len(str(xlabels[-1])) < 3 else 45
-        plt.xticks(xlabels, epochs+1, rotation=rotation)
+        plt.xticks(xlabels, epochs+1-fro, rotation=rotation)
         plt.xlabel("Epochs")
 
     plt.grid()

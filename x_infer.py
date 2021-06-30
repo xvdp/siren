@@ -181,6 +181,7 @@ class SirenRender:
             self.log[0].info(f"loading model from checkpoint: {model}")
             self.model, self.channels = model_from_checkpoint(model)
         else:
+            self.model = model
             self.log[0].info(f"loading model")
             self.channels = list(self.model.parameters())[-1].shape[0]
 
