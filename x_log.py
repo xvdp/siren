@@ -233,8 +233,10 @@ def plotlog(logname, column="Loss", figsize=(10,5), title=None, label=None, show
 
     plt.scatter(0,0, s=1, label=_info)
 
+    _ylabel = column
     if ylog:
         plt.yscale("log")
+        _ylabel += " (log)"
 
     plt.grid()
 
@@ -253,7 +255,10 @@ def plotlog(logname, column="Loss", figsize=(10,5), title=None, label=None, show
         plt.xticks(xlabels, epochs+1-fro, rotation=rotation)
         plt.xlabel("Epochs")
 
-    plt.yticks([y.min(), y.max()], [y.min(), y.max()])
+    _yticks = [sround(y.min()), sround(y.max())]
+    plt.yticks(_yticks, _yticks)
+    plt.ylabel(_ylabel)
+
 
     if "label" in kwargs:
         plt.legend()
