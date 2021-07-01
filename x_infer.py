@@ -5,8 +5,10 @@ import os.path as osp
 import numpy as np
 from PIL import Image
 import cv2
+from pandas.core import frame
 import torch
 import modules
+import x_utils
 from x_log import logger
 from x_dataio import get_mgrid, _aslist
 from x_modules import Siren
@@ -74,7 +76,7 @@ def load_state_dict(model, state_dict):
         model.load_state_dict(model_state_dict)
     return True
 
-def render_image(model, sidelen=[1426,256,256], frame_range=0, simple_siren=True, device="cuda"):
+def render_image(model, sidelen, frame_range=0, simple_siren=True, device="cuda"):
     """ TODO on training save sidelen
         TODO evaluate max size of chunk that can be rendered at a time given GPU
     Args
@@ -97,14 +99,10 @@ def render_image(model, sidelen=[1426,256,256], frame_range=0, simple_siren=True
     # TODO make grid slicer
     if not isinstance(frame_range, (list, tuple)):
         frame_range = [frame_range, frame_range+1]
-    output_size = [frame_range[1] -frame_range[0], *sidelen[1:], channels]
-
-    # mgrid = get_mgrid(sidelen)
-    # _from=np.prod([frame_range[0], *sidelen[1:]])
-    # _to=np.prod([frame_range[1], *sidelen[1:]])
+    output_size = [len(frame_range), *sidelen[1:], channels]
 
     with torch.no_grad():
-        model.to(device=device).eval()
+        model.to(device=device).eval() 
 
         # # coords = mgrid[_from:_to].to(device=device)
         coords = get_mgrid(sidelen, [frame_range]).to(device=device)
@@ -113,14 +111,15 @@ def render_image(model, sidelen=[1426,256,256], frame_range=0, simple_siren=True
         else:
             out = model(coords) # removes the "requires grad" in model definition
         out = out.cpu().detach().numpy() * 0.5 + 0.5
+        out = out.reshape(*output_size)
+
 
     del coords
-    # del mgrid
     del model
     torch.cuda.synchronize()
     torch.cuda.empty_cache()
 
-    return out.reshape(*output_size)
+    return out
 
 
 # def load_siren(model, sidelen, simple_siren=True):
@@ -166,6 +165,7 @@ class SirenRender:
         self.log = logger("Render", level=loglevel)
 
         self.fps = 30 if "fps" not in kwargs else kwargs['fps']
+        self.pix_fmt = "rgb24" if "pix_fmt" not in kwargs else kwargs["pix_fmt"]
 
 
         self.set_output(self.name)
@@ -180,6 +180,13 @@ class SirenRender:
         if isinstance(model, str) and osp.isfile(model):
             self.log[0].info(f"loading model from checkpoint: {model}")
             self.model, self.channels = model_from_checkpoint(model)
+
+            options = osp.join(osp.split(model)[0], "training_options.yml")
+            if osp.isfile(options):
+                opt = x_utils.EasyDict()
+                opt.from_yaml(options)
+                #self.sidelen = opt.sidelen
+
         else:
             self.model = model
             self.log[0].info(f"loading model")
@@ -287,7 +294,7 @@ class SirenRender:
                                                                         self.channels, chunksize))
             self.log[1].terminator = "\r"
             _i = 0
-            with vidi.FFcap(self.name, size=frame_size, fps=self.fps) as Vidi:
+            with vidi.FFcap(self.name, size=frame_size, fps=self.fps, pix_fmt=self.pix_fmt) as Vidi:
                 with torch.no_grad():
                     self.model.cuda().eval()
 

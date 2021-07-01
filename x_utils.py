@@ -290,8 +290,17 @@ class EasyDict(dict):
     def to_yaml(self, name):
         """ save to yaml"""
         os.makedirs(osp.split(name)[0], exist_ok=True)
-        with open(name, 'w') as fi:
-            yaml.dump(dict(self), fi)
+        with open(name, 'w') as _fi:
+            yaml.dump(dict(self), _fi)
+
+    def from_yaml(self, name):
+        """ load yaml"""
+        with open(name, 'r') as _fi:
+            try:
+                _dict = yaml.load(_fi, yaml.FullLoader)
+            except:
+                _dict = yaml.load(_fi) # FullLoader does not work in colab?
+            self.update(_dict)
 
 class EasyTrace(EasyDict):
     """ dict with object access

@@ -197,9 +197,10 @@ def train_video(config_file="experiment_scripts/x_eclipse_5122.yml", verbose=1, 
             opt.fps = vidi.ffprobe(opt.data_path)["avg_frame_rate"]
 
         dset = x_dataio.VideoDataset(opt.data_path, sample_size=max_samples, frame_range=opt.frame_range, strategy=opt.strategy)
+        sidelen = dset.sidelen.tolist()
         if verbose: print(f"Creating dataset of {len(dset)}, data loaded size {dset.data.shape}")
         dataloader = DataLoader(dset, shuffle=opt.shuffle, batch_size=1, pin_memory=True, num_workers=0)
-        opt.sidelen = tuple(dset.data.shape[:-1])
+        opt.sidelen = sidelen
         opt.chanels = dset.data.shape[-1]
         opt.sample_size = dset.sample_size
         opt.dset_len = len(dset)
@@ -219,7 +220,6 @@ def train_video(config_file="experiment_scripts/x_eclipse_5122.yml", verbose=1, 
         checkpoint = train(model, dataloader, opt.num_epochs, opt.lr, opt.epochs_til_checkpoint, folder, dataset=dset, num_steps=opt.num_steps)
 
         # cleanup
-        sidelen = dset.sidelen.tolist()
         _cleanup(dset, dataloader)
 
 

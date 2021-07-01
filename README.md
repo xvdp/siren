@@ -1,6 +1,21 @@
 # x_dev branch
-## dissection / playground
+## dissection / playground: tests
+
+### color image
+same as greyscale, just changes the input and output channels
+### train video
+paper trains cat_video [300,512,512,3] for 100K epochs lr=1e-4, sample size 160,000. Colab does not allow 100K iterations without booting us out. Trained with sample size 320,000 (estimated by adding up latent layer bytes `x_utils.estimate_samples(grad=1, **siren_definition_dict)`) during 5K iterations at lr 1e-4 and +8K at 3.16e-5, resulting in loses of 0.0042 and 0.0022. After 13K iterations some sine crawling artifacts are still noticeable.
+
+The nearly monotonic improvement of sine based activation combined with normal distribution of the sampling, suggests that learning rate decay could be estimated and optmized.
+
+
+[![video colab](https://colab.research.google.com/assets/colab-badge.svg)](https://colab.research.google.com/github/xvdp/siren/blob/x_dev/siren_video.ipynb)
 -----------
+## extra requirements
+* psutil
+* pytest
+* vidi https://github.com/xvdp/vidi ( similar to skvideo, less supported but simpler for me, as is my wrap of ffmpeg)
+
 
 # Implicit Neural Representations with Periodic Activation Functions
 ### [Project Page](https://vsitzmann.github.io/siren) | [Paper](https://arxiv.org/abs/2006.09661) | [Data](https://drive.google.com/drive/folders/1_iq__37-hw7FJOEUK1tX7mdp8SKB368K?usp=sharing)
