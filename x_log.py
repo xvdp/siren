@@ -14,6 +14,8 @@ import yaml
 import pandas as pd
 import matplotlib.pyplot as plt
 
+from x_utils import EasyDict
+
 
 safelog10 = lambda x: 0.0 if not x else np.log10(np.abs(x))
 sround = lambda x, d=1: np.round(x, max((-np.floor(safelog10(x)).astype(int) + d), 0))
@@ -220,13 +222,14 @@ def plotlog(logname, column="Loss", figsize=(10,5), title=None, label=None, show
     folder = osp.split(logname)[0]
     ymls = [f.path for f in os.scandir(folder) if f.name.endswith(".yml")]
     if ymls:
-        with open(ymls[0], "r") as _fi:
-            _meta = yaml.load(_fi, yaml.FullLoader)
-            for k in ['lr', 'strategy']:
-                if k in _meta:
-                    _info += f"\n{k}: {_meta[k]}"
-            if "data_path" in _meta:
-                _info += f"\n{osp.basename(_meta['data_path'])}"
+        _meta = EasyDict()
+        _meta.from_yaml(ymls[0])
+
+        for k in ['lr', 'strategy']:
+            if k in _meta:
+                _info += f"\n{k}: {_meta[k]}"
+        if "data_path" in _meta:
+            _info += f"\n{osp.basename(_meta['data_path'])}"
 
     plt.scatter(0,0, s=1, label=_info)
 
