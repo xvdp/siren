@@ -10,7 +10,6 @@ import os
 import os.path as osp
 import logging
 import numpy as np
-import yaml
 import pandas as pd
 import matplotlib.pyplot as plt
 
@@ -20,6 +19,7 @@ from x_utils import EasyDict
 safelog10 = lambda x: 0.0 if not x else np.log10(np.abs(x))
 sround = lambda x, d=1: np.round(x, max((-np.floor(safelog10(x)).astype(int) + d), 0))
 """ sround(x, d=1), smart round to largest digit + d; e.g. sround(0.0212343, 2): 0.0212"""
+
 ##
 # logging based loggers
 #
@@ -181,7 +181,7 @@ class PLog:
             if printlog:
                 print("\t".join(msg), **self._end)
 
-def plotlog(logname, column="Loss", figsize=(10,5), title=None, label=None, show=True, fro=0, to=None):
+def plotlog(logname, column="Loss", figsize=(10,5), title=None, label=None, show=True, fro=0, to=None, ylog=True):
     """ plots column [Loss] from csv file
     if column 'Epoch' exists, ticks them
     Args
@@ -233,6 +233,11 @@ def plotlog(logname, column="Loss", figsize=(10,5), title=None, label=None, show
 
     plt.scatter(0,0, s=1, label=_info)
 
+    if ylog:
+        plt.yscale("log")
+
+    plt.grid()
+
     if "Epoch" in df:
         _epoch = df.Epoch
         if fro > 0 or to is not None:
@@ -248,7 +253,8 @@ def plotlog(logname, column="Loss", figsize=(10,5), title=None, label=None, show
         plt.xticks(xlabels, epochs+1-fro, rotation=rotation)
         plt.xlabel("Epochs")
 
-    plt.grid()
+    plt.yticks([y.min(), y.max()], [y.min(), y.max()])
+
     if "label" in kwargs:
         plt.legend()
 

@@ -52,6 +52,7 @@ def load_last_checkpoint(folder, model):
     if checkpoint is not None:
         state_dict = torch.load(checkpoint)
         model.load_state_dict(state_dict)
+        print(f"Loaded checkpoint {osp.basename(checkpoint)}")
         return checkpoint
     return None
 

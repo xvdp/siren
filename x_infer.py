@@ -146,7 +146,6 @@ class SirenRender:
         sidelen    list | tuple # make mgrid
     kwargs
         frames      int, list, tuple, range
-        
     """
     def __init__(self, model, name, sidelen, loglevel=20, **kwargs):
 
@@ -278,7 +277,6 @@ class SirenRender:
         # TODO add chunksize estimatio
         # TODO hypernets
 
-
         if 'fps' in kwargs:
             self.fps = kwargs['fps']
 
@@ -290,8 +288,8 @@ class SirenRender:
             output_size = [chunksize, *self.sidelen[1:], self.channels]
 
             self.log[0].info("Rendering {}: {},{},{}, chunks: {}".format(self.name, len(frames),
-                                                                        tuple(self.sidelen[1:]),
-                                                                        self.channels, chunksize))
+                                                                         tuple(self.sidelen[1:]),
+                                                                         self.channels, chunksize))
             self.log[1].terminator = "\r"
             _i = 0
             with vidi.FFcap(self.name, size=frame_size, fps=self.fps, pix_fmt=self.pix_fmt) as Vidi:
@@ -335,8 +333,9 @@ class SirenRender:
     def play(self):
         vidi.ffplay(self.name)
 
-
-def render_video(model, outname, sidelen=[1,512,512], chunksize=3, simple_siren=True, original_path=None, max_frames=None, loop=0):
+# TODO to deprecate
+def render_video(model, outname, sidelen=[1,512,512], chunksize=3, simple_siren=True,
+                 original_path=None, max_frames=None, loop=0):
     """
     Args
         model           (nn.Module, str) siren model or chekckpoint path
@@ -410,7 +409,6 @@ def render_video(model, outname, sidelen=[1,512,512], chunksize=3, simple_siren=
                     # plt.imshow(frame)
                     # plt.show()
                     # return
-
 
                 print(f"rendered: frames {from_frame}, {to_frame}      ", end="\r")
                 from_frame = to_frame

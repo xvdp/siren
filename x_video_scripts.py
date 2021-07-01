@@ -1,7 +1,9 @@
-import os
+""" train video scripting
+"""
 import os.path as osp
 import torch
-import x_dataio, x_utils
+import x_dataio
+import x_utils
 from x_training import train_video
 from x_infer import render_video
 

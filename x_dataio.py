@@ -28,6 +28,7 @@ subset of modified functions
 """
 import os
 import os.path as osp
+
 import numpy as np
 from PIL import Image
 # import skvideo.io
@@ -55,7 +56,6 @@ def get_mgrid(sidelen, ranges=None, indices=False, strides=1, flat=False, device
     Examples:
         >>> get_mgrid(sidelen=[121,34,34]) # return full meshgrid
         >>> get_mgrid(sidelen=[121,34,34], indices=True) # mesh grid indices
-    
 
         >>> get_mgrid(sidelen=[121,34,34], ranges=[[0,10]]) # slice in dim 0
         >>> get_mgrid(sidelen=[121,34,34], ranges=[[0,10],[3,4],[5,6]]) # slice all dims
@@ -77,7 +77,6 @@ def get_mgrid(sidelen, ranges=None, indices=False, strides=1, flat=False, device
     # strided sidelen
     # sublen = np.ceil(sublen/strides).astype(int)
     sublen = torch.ceil(sublen/strides).to(dtype=torch.int64)
-
 
     out = []
     _offset = 0 if indices else 1
@@ -174,8 +173,6 @@ def _check_ranges(sidelen, ranges):
     sublen = torch.as_tensor(sublen).cpu()
     return ranges, sublen
 
-
-
 def get_subsidelen(sidelen, max_samples):
     """ returns a dictionary of step: [sidelen,..] <= max samples
     """
@@ -209,7 +206,7 @@ def get_stride_tree(sidelen, max_samples):
 
 def get_sparse_grid(sidelen, strides):
     if isinstance(strides, int):
-        stride = [strides for _ in range(len(sidelen))]
+        strides = [strides for _ in range(len(sidelen))]
 
     indices = get_mgrid(sidelen, strides=strides, indices=True)
     offsets = get_mgrid(strides, indices=True)
@@ -227,8 +224,6 @@ def get_inflatable_grid(sidelen, strides):
 
     # handled by datalpader
     # shuffled_perms = torch.randperm(np.prod(strides))
-
-
 
 def grid_permutations(sidelen, sizes):
     """  full set of permutations on  data size sidelen, of sizes
@@ -307,7 +302,7 @@ class VideoDataset(Dataset):
         self.sidelen = None
         self.mgrid = None
 
-        self.sample_size = sample_size # naming change N_samples, overrides sample_fraction if passed
+        self.sample_size = sample_size # naming change N_samples, overrides sample_fraction
         self.sample_fraction = sample_fraction
         self.sampler = None         # defined in strategy: 1
         self.grid_indices = None    # defined in strategy: 2
@@ -324,7 +319,6 @@ class VideoDataset(Dataset):
             self.data = as_centered_tensor(vidi.ffread(data_path), device=device)
 
         elif osp.isdir(data_path):
-            # open_tensor = lambda x, device="cuda": torch.as_tensor((np.asarray(Image.open(x), dtype=np.float32) - 127.5)/127.5, device=device)
             images = sparse_image_list(data_path, frame_range)
             self.data = torch.stack([as_centered_tensor(Image.open(image), device=device) for image in images], dim=0)
 
@@ -336,8 +330,6 @@ class VideoDataset(Dataset):
         self.data = self.data.view(-1, self.data.shape[-1])
         log[0].info(f"Loaded data, sidelen: {self.sidelen.tolist()}, channels {self.channels}")
         log[0].info(f"         => reshaped to: {tuple(self.data.shape)}")
-
-
 
         if sample_size is not None:
             self.sample_fraction = min(1, (sample_size / self.sidelen.prod()).item())
@@ -435,53 +427,5 @@ class VideoDataset2(VideoDataset):
         """
         """
         return self._item(idx)
-###
 
-# def get_subgrid_pos(pos, sidelen, dtype=torch.float32, device="cpu"):
-#     """ from grid index single position
-#     """
-#     # index = lambda i, sidelen, position: (i // np.prod(sidelen[position+1:] + [1]))%sidelen[position]
-#     # value = lambda index, sidelen, position: 2/(sidelen[position]-1) * index -1
-#     # or
-#     # sdims = range(len(sidelen))
-#     # trailing = np.prod(sidelen[i+1:]+[1]
-#     # indices = [(pos//trailing[i])%sidelen[i] for i in sdims]
-#     # grid_pos = [2/(sidelen[i]-1)*indices[i]-1  for i in sdims]
-
-#     # pos % np.prod(sidelen)
-#     return torch.as_tensor([2/(sidelen[i]-1)* ((pos//np.prod(sidelen[i+1:]+[1]))%sidelen[i]) - 1
-#                             for i in range(len(sidelen))], dtype=dtype, device=device)
-
-# def get_subgrid(positions, sidelen, dtype=torch.float32, device="cpu"):
-#     """ get grid indices from position array
-#     Example
-#         >>> get_subgrid(torch.randint(0, np.prod(sidelen), (100,)), sidelen)
-#         # returns 100 random subpositions within an array.
-#     """
-#     sidelen = np.asarray(sidelen)
-#     sdim = range(len(sidelen))
-#     trail = torch.as_tensor([sidelen[i+1:].prod() for i in sdim])
-#     # trail = [np.prod(sidelen[i+1:]+[1]) for i in range(len(sidelen))]
-#     offset = [2/(side-1) for side in sidelen]
-
-#     return torch.stack([torch.as_tensor([offset[i] * ((pos//trail[i])%sidelen[i]) - 1
-#                                          for i in sdim], dtype=dtype)
-#                         for pos in positions]).to(device=device)
-
-
-# def get_blocks(sidelen, max_samples, level=-1):
-
-#     pyr = get_tree_dims(sidelen, max_samples)
-#     dims = len(sidelen)
-
-#     # sparsest index block
-#     # mostly empty - random sampling - could one do average pooling nahh.
-#     i0 = get_mgrid(sidelen, strides=pyr[-1], indices=True)
-#     c0 = i0*2/(sidelen-1) - 1 # equivalent to get_mgrid()
-
-
-#     # _sampler =  get_mgrid(strides, indices=True)
-
-#     # add a random factor to strided search
-#     rand = torch.round(torch.rand(dims)*pyr[-1]).to(dtype=torch.int64)
 
