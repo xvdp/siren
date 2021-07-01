@@ -163,6 +163,9 @@ class CPUse:
     def __repr__(self):
         return "CPU: ({})".format(self.__dict__)
 
+
+
+
 def get_video_attrs(name):
     """get size info from video header as
         N, H, W, C
@@ -247,19 +250,17 @@ def get_abspath(fname):
 
 def read_config(config_file, defaults=None):
     """ reads yaml configs from expermients"""
-    with open(config_file, "r") as _fi:
-        data = yaml.load(_fi, Loader=yaml.FullLoader)
-
     opt = EasyDict()
     if isinstance(defaults, dict):
         opt.update(defaults)
+
+    data = EasyDict()
+    data.from_yaml(config_file)
     opt.update(data)
+
     for key in opt:
         if "path" in key and isinstance(opt[key], str):
             opt[key] = get_abspath(opt[key])
-    for _o in opt:
-        if opt[_o] == "None":
-            opt[_o] = None
     return opt
 
 ###
