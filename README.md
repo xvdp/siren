@@ -4,10 +4,11 @@
 ### color image
 same as greyscale, just changes the input and output channels
 ### train video
-paper trains cat_video [300,512,512,3] for 100K epochs lr=1e-4, sample size 160,000. Colab does not allow 100K iterations without booting us out. Trained with sample size 320,000 (estimated by adding up latent layer bytes `x_utils.estimate_samples(grad=1, **siren_definition_dict)`) during 5K iterations at lr 1e-4 and +8K at 3.16e-5, resulting in loses of 0.0042 and 0.0022. After 13K iterations some sine crawling artifacts are still noticeable.
+paper trains cat_video [300,512,512,3] for 100K epochs lr=1e-4, sample size 160,000. Colab does not allow 100K iterations without booting us out. Trained with sample size 320,000 (estimated by adding up latent layer bytes `x_utils.estimate_samples(grad=1, **siren_definition_dict)`) during 5K iterations at lr 1e-4 and +8K at 3.16e-5, resulting in loses of 0.0042 and 0.0022. After 13K iterations some sine crawling artifacts are still noticeable but model is still improving.
 
 The nearly monotonic improvement of sine based activation combined with normal distribution of the sampling, suggests that learning rate decay could be estimated and optmized.
 
+https://user-images.githubusercontent.com/40925114/124171151-096ec480-da5d-11eb-8a36-a8eea2b2ac44.mp4
 
 [![video colab](https://colab.research.google.com/assets/colab-badge.svg)](https://colab.research.google.com/github/xvdp/siren/blob/x_dev/siren_video.ipynb)
 -----------
