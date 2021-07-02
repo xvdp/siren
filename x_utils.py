@@ -45,11 +45,18 @@ class EasyDict(dict):
     def from_yaml(self, name):
         """ load yaml"""
         with open(name, 'r') as _fi:
-            try:
-                _dict = yaml.load(_fi, yaml.FullLoader)
-            except:
-                _dict = yaml.load(_fi) # FullLoader does not work in colab?
+            _dict = yaml.load(_fi, Loader=get_loader())
             self.update(_dict)
+
+def get_loader(loader=None):
+    loaders = yaml.loader.__dict__['__all__']
+    loader = loader if loader is not None else ["FullLoader", "BaseLoader"]
+    loader = [loader] if isinstance(loader, str) else loader
+
+    loader = list(set(loaders) & set(loader))
+    if not loader:
+        loader = loaders
+    return yaml.__dict__[loader[0]]
 
 class EasyTrace(EasyDict):
     """ dict with object access
